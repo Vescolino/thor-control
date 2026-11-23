@@ -1,6 +1,5 @@
 package com.thorctl.ui
 
-import android.content.Context
 import android.os.VibrationEffect
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
@@ -44,7 +43,9 @@ import androidx.compose.material.icons.rounded.KeyboardHide
 import androidx.compose.material.icons.rounded.KeyboardReturn
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Send
+import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -105,38 +106,6 @@ private val Accent = Color(0xFF4F8EF0)
 private val KeyShape = RoundedCornerShape(10.dp)
 private val KeyShadow = Color(0x80000000)
 
-private const val PREFS_NAME = "thor_keyboard_prefs"
-private const val KEY_CUSTOM_HEIGHT_DP = "custom_height_dp"
-private const val DEFAULT_HEIGHT_DP = 315f
-
-private fun loadSavedHeightDp(): Float {
-    return try {
-        OverlayController.appContext
-            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getFloat(KEY_CUSTOM_HEIGHT_DP, DEFAULT_HEIGHT_DP)
-            .coerceIn(190f, 480f)
-    } catch (_: Exception) {
-        DEFAULT_HEIGHT_DP
-    }
-}
-
-private fun saveHeightDp(value: Float) {
-    try {
-        OverlayController.appContext
-            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putFloat(KEY_CUSTOM_HEIGHT_DP, value.coerceIn(190f, 480f))
-            .apply()
-    } catch (_: Exception) {
-    }
-}
-
-private fun modeFromHeight(dp: Float): Int = when {
-    dp < 280f -> 0
-    dp > 350f -> 2
-    else -> 1
-}
-
 private fun keyHaptic() = OverlayController.haptic(VibrationEffect.EFFECT_CLICK)
 
 private val EMOJIS = listOf(
@@ -156,21 +125,26 @@ fun KeyboardPanel(ui: StateFlow<KeyboardController.Ui>, visible: StateFlow<Boole
     val shown by visible.collectAsState()
     var showEmojis by remember { mutableStateOf(false) }
     var resizeMode by remember { mutableStateOf(false) }
-    var customHeightDp by remember { mutableFloatStateOf(loadSavedHeightDp()) }
+    var moveMode by remember { mutableStateOf(false) }
+    var customHeightDp by remember { mutableFloatStateOf(KeyboardController.getSavedHeightDp()) }
+    var offsetYDp by remember { mutableFloatStateOf(KeyboardController.getSavedOffsetYDp()) }
     val density = LocalDensity.current
 
     LaunchedEffect(shown) {
         if (!shown) {
             showEmojis = false
             resizeMode = false
+            moveMode = false
         } else {
-            customHeightDp = loadSavedHeightDp()
+            customHeightDp = KeyboardController.getSavedHeightDp()
+            offsetYDp = KeyboardController.getSavedOffsetYDp()
         }
     }
 
     DisposableEffect(Unit) {
         onDispose {
-            saveHeightDp(customHeightDp)
+            KeyboardController.updateCustomHeightDp(customHeightDp)
+            KeyboardController.updateOffsetYDp(offsetYDp)
         }
     }
 
@@ -185,33 +159,50 @@ fun KeyboardPanel(ui: StateFlow<KeyboardController.Ui>, visible: StateFlow<Boole
         val popup = remember { KeyPopup() }
         popup.panelW = constraints.maxWidth.toFloat()
         Column(Modifier.fillMaxSize()) {
-            if (resizeMode) {
+            if (moveMode) {
+                MoveBar(
+                    offsetYDp = offsetYDp,
+                    onOffsetChange = {
+                        offsetYDp = it
+                        KeyboardController.updateOffsetYDp(it)
+                    },
+                    onReset = {
+                        offsetYDp = 0f
+                        KeyboardController.updateOffsetYDp(0f)
+                    },
+                    onDone = { moveMode = false },
+                )
+            } else if (resizeMode) {
                 ResizeBar(
                     heightDp = customHeightDp.roundToInt(),
                     onDoneResize = {
-                        saveHeightDp(customHeightDp)
-                        KeyboardController.setHeightMode(modeFromHeight(customHeightDp))
+                        KeyboardController.updateCustomHeightDp(customHeightDp)
                         resizeMode = false
                     },
                     onDragDeltaPx = { dy ->
                         val deltaDp = with(density) { dy.toDp().value }
                         customHeightDp = (customHeightDp - deltaDp).coerceIn(190f, 480f)
-                        saveHeightDp(customHeightDp)
+                        KeyboardController.updateCustomHeightDp(customHeightDp)
                     },
                 )
             }
             ToolRow(
                 state = state,
                 showEmojis = showEmojis,
+                moveMode = moveMode,
                 resizeMode = resizeMode,
                 onToggleEmojis = { showEmojis = !showEmojis },
+                onToggleMove = {
+                    moveMode = !moveMode
+                    if (moveMode) resizeMode = false
+                },
                 onToggleResize = {
                     if (resizeMode) {
-                        saveHeightDp(customHeightDp)
-                        KeyboardController.setHeightMode(modeFromHeight(customHeightDp))
+                        KeyboardController.updateCustomHeightDp(customHeightDp)
                         resizeMode = false
                     } else {
                         resizeMode = true
+                        moveMode = false
                     }
                 },
             )
@@ -235,6 +226,66 @@ fun KeyboardPanel(ui: StateFlow<KeyboardController.Ui>, visible: StateFlow<Boole
         }
         Flash(state, Modifier.align(Alignment.TopCenter).padding(top = 8.dp))
         AccentPopup(popup)
+    }
+}
+
+@Composable
+private fun MoveBar(
+    offsetYDp: Float,
+    onOffsetChange: (Float) -> Unit,
+    onReset: () -> Unit,
+    onDone: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(38.dp)
+            .background(Accent.copy(alpha = 0.25f))
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.SwapVert, "Position", tint = KeyInk, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Slider(
+            value = offsetYDp,
+            onValueChange = onOffsetChange,
+            valueRange = 0f..350f,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(6.dp))
+        Box(
+            Modifier
+                .height(24.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(KeyFill)
+                .pointerInput(Unit) {
+                    detectTapGestures(onTap = {
+                        keyHaptic()
+                        onReset()
+                    })
+                }
+                .padding(horizontal = 8.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("Unten", color = KeyInk, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+        }
+        Spacer(Modifier.width(6.dp))
+        Box(
+            Modifier
+                .height(24.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(Accent)
+                .pointerInput(Unit) {
+                    detectTapGestures(onTap = {
+                        keyHaptic()
+                        onDone()
+                    })
+                }
+                .padding(horizontal = 10.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("Fertig", color = KeyInk, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        }
     }
 }
 
@@ -293,8 +344,10 @@ private fun ResizeBar(
 private fun ToolRow(
     state: KeyboardController.Ui,
     showEmojis: Boolean,
+    moveMode: Boolean,
     resizeMode: Boolean,
     onToggleEmojis: () -> Unit,
+    onToggleMove: () -> Unit,
     onToggleResize: () -> Unit,
 ) {
     Row(
@@ -312,6 +365,8 @@ private fun ToolRow(
         Pill(Icons.Rounded.ContentPaste, "Einfügen") { KeyboardController.paste() }
         Spacer(Modifier.weight(1f))
         CircleIconButton(Icons.Rounded.EmojiEmotions, "Emojis", active = showEmojis, onTap = onToggleEmojis)
+        Spacer(Modifier.width(6.dp))
+        CircleIconButton(Icons.Rounded.SwapVert, "Tastatur verschieben", active = moveMode, onTap = onToggleMove)
         Spacer(Modifier.width(6.dp))
         CircleIconButton(Icons.Rounded.DragHandle, "Größe anpassen", active = resizeMode, onTap = onToggleResize)
         Spacer(Modifier.width(6.dp))
@@ -514,7 +569,7 @@ private fun rows(layer: Layer): List<List<Key>> {
     )
 }
 
-/** Gedrückt halten für Umlaute & Akzente (ü, ö, ä, ß direkt an Position 1). */
+/** Gedrückt halten für Umlaute & Akzente (ü, ö, ä, ß direkt unter dem Finger). */
 private val ACCENTS: Map<String, List<String>> = mapOf(
     "a" to "ä à á â æ ã å ā",
     "c" to "ç ć č",
@@ -561,10 +616,12 @@ private class KeyPopup {
         cellW = face.width
         cellH = face.height
         val total = cellW * opts.size
-        x = if (face.left + total <= panelW - gap) face.left else face.right - total
+        val alignLeft = face.left + total <= panelW - gap
+        val ordered = if (alignLeft) opts else opts.reversed()
+        x = if (alignLeft) face.left else face.right - total
         x = x.coerceIn(gap, (panelW - total - gap).coerceAtLeast(gap))
         y = (face.top - cellH - gap).coerceAtLeast(0f)
-        options = opts
+        options = ordered
         selected = indexAt(fingerX)
     }
 }
