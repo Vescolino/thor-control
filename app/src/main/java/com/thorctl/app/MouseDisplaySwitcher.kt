@@ -97,7 +97,7 @@ object MouseDisplaySwitcher {
         isOnBottom = toBottom
         OverlayController.haptic(VibrationEffect.EFFECT_CLICK)
 
-        val cmd = "input -d $targetId tap 1 1\n"
+        val cmd = "input -d $targetId mouse tap 1 1\n"
         try {
             val writer = ensureShell()
             writer.write(cmd)
