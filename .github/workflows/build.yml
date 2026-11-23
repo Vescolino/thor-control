@@ -19,6 +19,7 @@ jobs:
 
       - name: Build Magisk Module
         run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
           chmod +x gradlew build-module.sh
           ./build-module.sh
 
