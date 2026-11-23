@@ -1,0 +1,29 @@
+name: Build Thor Control
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Build Magisk Module
+        run: |
+          chmod +x gradlew build-module.sh
+          ./build-module.sh
+
+      - name: Upload Magisk ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: ThorControl-magisk
+          path: out/ThorControl-magisk.zip
