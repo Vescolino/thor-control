@@ -6,6 +6,7 @@ import android.os.VibrationEffect
 import android.view.MotionEvent
 import android.view.ViewConfiguration
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -132,13 +133,16 @@ fun KeyboardPanel(ui: StateFlow<KeyboardController.Ui>, visible: StateFlow<Boole
     var customHeightDp by remember { mutableFloatStateOf(KeyboardController.getSavedHeightDp()) }
     var offsetYDp by remember { mutableFloatStateOf(KeyboardController.getSavedOffsetYDp()) }
     val density = LocalDensity.current
+    val anim = remember { Animatable(0f) }
 
     LaunchedEffect(shown) {
-        if (!shown) {
-            showEmojis = false
-        } else {
+        if (shown) {
             customHeightDp = KeyboardController.getSavedHeightDp()
             offsetYDp = KeyboardController.getSavedOffsetYDp()
+            anim.animateTo(1f, tween(durationMillis = 200, easing = FastOutSlowInEasing))
+        } else {
+            showEmojis = false
+            anim.animateTo(0f, tween(durationMillis = 180, easing = FastOutSlowInEasing))
         }
     }
 
@@ -149,7 +153,7 @@ fun KeyboardPanel(ui: StateFlow<KeyboardController.Ui>, visible: StateFlow<Boole
         }
     }
 
-    if (!shown) return
+    if (!shown && anim.value <= 0.001f) return
 
     val getOffset = { offsetYDp }
     val setOffset: (Float) -> Unit = { newVal ->
@@ -169,6 +173,11 @@ fun KeyboardPanel(ui: StateFlow<KeyboardController.Ui>, visible: StateFlow<Boole
         Modifier
             .fillMaxWidth()
             .height(customHeightDp.dp)
+            .graphicsLayer {
+                val slidePx = with(density) { customHeightDp.dp.toPx() }
+                translationY = (1f - anim.value) * slidePx
+                alpha = anim.value
+            }
             .background(KbBg),
     ) {
         val popup = remember { KeyPopup() }
