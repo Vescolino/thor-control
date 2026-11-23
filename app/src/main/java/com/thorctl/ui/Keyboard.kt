@@ -106,13 +106,15 @@ private val KeyShape = RoundedCornerShape(10.dp)
 private val KeyShadow = Color(0x80000000)
 
 private const val PREFS_NAME = "thor_keyboard_prefs"
-private const val KEY_HEIGHT_DP = "panel_height_dp"
-private const val DEFAULT_HEIGHT_DP = 310f
+private const val KEY_CUSTOM_HEIGHT_DP = "custom_height_dp"
+private const val DEFAULT_HEIGHT_DP = 315f
 
 private fun loadSavedHeightDp(): Float {
     return try {
-        val prefs = OverlayController.appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.getFloat(KEY_HEIGHT_DP, DEFAULT_HEIGHT_DP).coerceIn(190f, 480f)
+        OverlayController.appContext
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getFloat(KEY_CUSTOM_HEIGHT_DP, DEFAULT_HEIGHT_DP)
+            .coerceIn(190f, 480f)
     } catch (_: Exception) {
         DEFAULT_HEIGHT_DP
     }
@@ -120,10 +122,19 @@ private fun loadSavedHeightDp(): Float {
 
 private fun saveHeightDp(value: Float) {
     try {
-        val prefs = OverlayController.appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putFloat(KEY_HEIGHT_DP, value.coerceIn(190f, 480f)).apply()
+        OverlayController.appContext
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putFloat(KEY_CUSTOM_HEIGHT_DP, value.coerceIn(190f, 480f))
+            .apply()
     } catch (_: Exception) {
     }
+}
+
+private fun modeFromHeight(dp: Float): Int = when {
+    dp < 280f -> 0
+    dp > 350f -> 2
+    else -> 1
 }
 
 private fun keyHaptic() = OverlayController.haptic(VibrationEffect.EFFECT_CLICK)
@@ -179,6 +190,7 @@ fun KeyboardPanel(ui: StateFlow<KeyboardController.Ui>, visible: StateFlow<Boole
                     heightDp = customHeightDp.roundToInt(),
                     onDoneResize = {
                         saveHeightDp(customHeightDp)
+                        KeyboardController.setHeightMode(modeFromHeight(customHeightDp))
                         resizeMode = false
                     },
                     onDragDeltaPx = { dy ->
@@ -196,6 +208,7 @@ fun KeyboardPanel(ui: StateFlow<KeyboardController.Ui>, visible: StateFlow<Boole
                 onToggleResize = {
                     if (resizeMode) {
                         saveHeightDp(customHeightDp)
+                        KeyboardController.setHeightMode(modeFromHeight(customHeightDp))
                         resizeMode = false
                     } else {
                         resizeMode = true
