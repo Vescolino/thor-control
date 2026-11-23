@@ -98,6 +98,24 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
-    </application>
-</manifest>
+           <service
+            android:name="com.thorctl.app.ThorWallpaperService"
+            android:label="Thor Wallpaper"
+            android:permission="android.permission.BIND_WALLPAPER"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.wallpaper.WallpaperService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.wallpaper"
+                android:resource="@xml/thor_wallpaper" />
+        </service>
+
+        <activity
+            android:name="com.thorctl.app.WallpaperPickerActivity"
+            android:label="Thor Wallpaper wählen"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        </application>
+        </manifest>
 
