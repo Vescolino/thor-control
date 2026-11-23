@@ -16,7 +16,7 @@ class LandscapeTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
-        val locked = isLocked()
+        val locked = isRotationLocked()
         try {
             if (locked) {
                 // Auto-Rotate wieder einschalten
@@ -37,12 +37,12 @@ class LandscapeTileService : TileService() {
         updateTile()
     }
 
-    private fun isLocked(): Boolean =
+    private fun isRotationLocked(): Boolean =
         Settings.System.getInt(contentResolver, Settings.System.ACCELEROMETER_ROTATION, 1) == 0
 
     private fun updateTile() {
         val tile = qsTile ?: return
-        val locked = isLocked()
+        val locked = isRotationLocked()
         tile.state = if (locked) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
         tile.label = "Querformat"
         tile.subtitle = if (locked) "Gesperrt" else "Auto"
