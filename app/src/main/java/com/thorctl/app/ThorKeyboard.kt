@@ -17,11 +17,10 @@ import com.thorctl.ui.ThorTheme
 
 /**
  * The system keyboard service. Android always puts a keyboard window on the screen of the text
- * field being edited. Normally ours is empty and zero-height there (apps are neither covered nor
- * resized) and the real keyboard, with its touchpad, is drawn on the bottom screen by
- * [KeyboardController]. Held upright (the top screen in portrait, where the bottom screen is off
- * to the side), the keys appear in this window instead, as an ordinary keyboard under the app.
- * Both live in this persistent process, so keys go straight into [getCurrentInputConnection].
+ * field being edited. When editing on the top screen (landscape), ours takes zero space there so
+ * top apps are not resized while the keyboard panel is drawn on the bottom screen. When editing
+ * directly on the bottom screen (or in portrait on the top screen), insets are reported so apps
+ * like Gemini shift their input box above the keyboard.
  */
 class ThorKeyboard : InputMethodService() {
     private var root: FrameLayout? = null
@@ -52,15 +51,32 @@ class ThorKeyboard : InputMethodService() {
 
     override fun onEvaluateFullscreenMode(): Boolean = false
 
-    /** Bottom-screen mode: takes no space and no touches on the editing screen. */
+    private fun isBottomDisplay(): Boolean {
+        val id = try {
+            display?.displayId
+        } catch (_: Exception) {
+            null
+        }
+        return id != null && id != Display.DEFAULT_DISPLAY
+    }
+
     override fun onComputeInsets(outInsets: Insets) {
         super.onComputeInsets(outInsets)
         if (inline) return
         val h = window?.window?.decorView?.height ?: 0
-        outInsets.contentTopInsets = h
-        outInsets.visibleTopInsets = h
-        outInsets.touchableInsets = Insets.TOUCHABLE_INSETS_REGION
-        outInsets.touchableRegion.setEmpty()
+        if (isBottomDisplay() && KeyboardController.isShown) {
+            val kbPx = KeyboardController.currentHeightPx(this).coerceAtMost(h)
+            val top = (h - kbPx).coerceAtLeast(0)
+            outInsets.contentTopInsets = top
+            outInsets.visibleTopInsets = top
+            outInsets.touchableInsets = Insets.TOUCHABLE_INSETS_REGION
+            outInsets.touchableRegion.setEmpty()
+        } else {
+            outInsets.contentTopInsets = h
+            outInsets.visibleTopInsets = h
+            outInsets.touchableInsets = Insets.TOUCHABLE_INSETS_REGION
+            outInsets.touchableRegion.setEmpty()
+        }
     }
 
     override fun onStartInput(attribute: EditorInfo, restarting: Boolean) {
@@ -73,6 +89,7 @@ class ThorKeyboard : InputMethodService() {
         inline = uprightTopScreen()
         if (inline) showInline() else dropInline()
         KeyboardController.onShow(info, inline)
+        updateInputViewShown()
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
@@ -97,7 +114,6 @@ class ThorKeyboard : InputMethodService() {
         val o = OverlayOwner()
         val v = ComposeView(this)
         o.attach(v)
-        // Compose looks for its lifecycle from the window's root view as well.
         window?.window?.decorView?.let { decor ->
             decor.setViewTreeLifecycleOwner(o)
             decor.setViewTreeSavedStateRegistryOwner(o)
@@ -117,10 +133,6 @@ class ThorKeyboard : InputMethodService() {
         owner = null
     }
 
-    /**
-     * L1 / R1 are shift while typing. The daemon reads them from the controller (whichever screen
-     * the controller is routed to); when they also reach us, swallow them so the app doesn't react.
-     */
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
         if (isShoulder(keyCode) && KeyboardController.isShown) true else super.onKeyDown(keyCode, event)
 
