@@ -42,11 +42,7 @@ zram_zstd() {
 case "$MODE" in
   apply)
     disabled $SE && pm enable $SE >/dev/null 2>&1
-    if other_home; then
-      disabled $LAUNCHER3 || { pm disable $LAUNCHER3 >/dev/null 2>&1 && echo "system-tweaks: disabled $LAUNCHER3"; }
-    elif disabled $LAUNCHER3; then
-      pm enable $LAUNCHER3 >/dev/null 2>&1 && echo "system-tweaks: no other launcher, re-enabled $LAUNCHER3"
-    fi
+    disabled $LAUNCHER3 && pm enable $LAUNCHER3 >/dev/null 2>&1
     for s in $SERVICES; do
       [ "$(getprop init.svc.$s)" = running ] && stop "$s" && echo "system-tweaks: stopped $s"
     done
