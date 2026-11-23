@@ -16,6 +16,8 @@ pm grant $PKG android.permission.WRITE_SECURE_SETTINGS 2>/dev/null
 pm grant $PKG android.permission.BLUETOOTH_CONNECT 2>/dev/null
 pm grant $PKG android.permission.BLUETOOTH_ADVERTISE 2>/dev/null
 appops set $PKG SYSTEM_ALERT_WINDOW allow 2>/dev/null
+appops set $PKG WRITE_SETTINGS allow 2>/dev/null
+
 # Thor Keyboard stays available in the keyboard list (choosing it as the keyboard is up to you).
 ime enable $PKG/.app.ThorKeyboard >/dev/null 2>&1
 
