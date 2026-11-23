@@ -6,6 +6,9 @@
     <uses-permission
         android:name="android.permission.WRITE_SECURE_SETTINGS"
         tools:ignore="ProtectedPermissions" />
+    <uses-permission
+        android:name="android.permission.WRITE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Gamepad mode over Bluetooth: the Thor registers as a Bluetooth HID gamepad. -->
@@ -67,6 +70,17 @@
                 android:resource="@xml/method" />
         </service>
 
+        <service
+            android:name=".app.LandscapeTileService"
+            android:exported="true"
+            android:icon="@android:drawable/ic_menu_rotate"
+            android:label="Querformat"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
         <receiver
             android:name=".app.CommandReceiver"
             android:exported="false">
@@ -86,3 +100,4 @@
         </receiver>
     </application>
 </manifest>
+
