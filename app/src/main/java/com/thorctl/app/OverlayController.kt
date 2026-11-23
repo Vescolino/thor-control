@@ -385,8 +385,39 @@ object OverlayController {
         }
     }
 
-    private fun removeHud() {
+        private fun removeHud() {
         val v = hudView ?: return
         hudView = null
         try {
             hudWm?.removeViewImmediate(v)
+        } catch (_: Exception) {
+        }
+        hudOwner?.destroy()
+        hudOwner = null
+        hudWm = null
+        hudDisplayId = -1
+    }
+
+    fun post(r: () -> Unit) {
+        main.post(r)
+    }
+
+    /**
+     * Context and window type for an overlay on [display]: an accessibility overlay when the
+     * service is bound (above everything), else an application overlay. Null if neither works.
+     */
+    fun overlayContext(display: Display): Pair<Context, Int>? {
+        if (!::app.isInitialized) return null
+        val service = a11y
+        return when {
+            service != null -> service.createDisplayContext(display) to WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+            Settings.canDrawOverlays(app) -> {
+                val type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                app.createDisplayContext(display).createWindowContext(type, null) to type
+            }
+            else -> null
+        }
+    }
+
+    val appContext: Context get() = app
+}
