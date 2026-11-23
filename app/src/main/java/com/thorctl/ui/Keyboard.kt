@@ -1,7 +1,10 @@
+@file:OptIn(ExperimentalComposeUiApi::class)
+
 package com.thorctl.ui
 
 import android.os.VibrationEffect
-import android.view.View
+import android.view.MotionEvent
+import android.view.ViewConfiguration
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -60,6 +63,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
@@ -73,12 +77,13 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -107,12 +112,6 @@ private val ToolBtnShape = RoundedCornerShape(12.dp)
 private val KeyShadow = Color(0x80000000)
 
 private fun keyHaptic() = OverlayController.haptic(VibrationEffect.EFFECT_CLICK)
-
-private fun screenY(view: View, localY: Float): Float {
-    val loc = IntArray(2)
-    view.getLocationOnScreen(loc)
-    return loc[1] + localY
-}
 
 private val EMOJIS = listOf(
     "😀", "😂", "🤣", "😊", "😍", "🥰", "😘", "😎", "🤩", "🥳",
@@ -152,16 +151,18 @@ fun KeyboardPanel(ui: StateFlow<KeyboardController.Ui>, visible: StateFlow<Boole
 
     if (!shown) return
 
-    val onDragOffsetPx: (Float) -> Unit = { dy ->
-        val deltaDp = with(density) { dy.toDp().value }
-        offsetYDp = (offsetYDp - deltaDp).coerceIn(0f, 350f)
-        KeyboardController.updateOffsetYDp(offsetYDp)
+    val getOffset = { offsetYDp }
+    val setOffset: (Float) -> Unit = { newVal ->
+        val clamped = newVal.coerceIn(0f, 350f)
+        offsetYDp = clamped
+        KeyboardController.updateOffsetYDp(clamped)
     }
 
-    val onDragHeightPx: (Float) -> Unit = { dy ->
-        val deltaDp = with(density) { dy.toDp().value }
-        customHeightDp = (customHeightDp - deltaDp).coerceIn(190f, 480f)
-        KeyboardController.updateCustomHeightDp(customHeightDp)
+    val getHeight = { customHeightDp }
+    val setHeight: (Float) -> Unit = { newVal ->
+        val clamped = newVal.coerceIn(190f, 480f)
+        customHeightDp = clamped
+        KeyboardController.updateCustomHeightDp(clamped)
     }
 
     BoxWithConstraints(
@@ -177,12 +178,11 @@ fun KeyboardPanel(ui: StateFlow<KeyboardController.Ui>, visible: StateFlow<Boole
                 state = state,
                 showEmojis = showEmojis,
                 onToggleEmojis = { showEmojis = !showEmojis },
-                onDragOffsetPx = onDragOffsetPx,
-                onResetOffset = {
-                    offsetYDp = 0f
-                    KeyboardController.updateOffsetYDp(0f)
-                },
-                onDragHeightPx = onDragHeightPx,
+                getOffset = getOffset,
+                setOffset = setOffset,
+                getHeight = getHeight,
+                setHeight = setHeight,
+                density = density.density,
             )
             if (showEmojis) {
                 EmojiGrid(
@@ -195,7 +195,9 @@ fun KeyboardPanel(ui: StateFlow<KeyboardController.Ui>, visible: StateFlow<Boole
                 Keys(
                     state = state,
                     popup = popup,
-                    onDragOffsetPx = onDragOffsetPx,
+                    getOffset = getOffset,
+                    setOffset = setOffset,
+                    density = density.density,
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
@@ -213,9 +215,11 @@ private fun ToolRow(
     state: KeyboardController.Ui,
     showEmojis: Boolean,
     onToggleEmojis: () -> Unit,
-    onDragOffsetPx: (Float) -> Unit,
-    onResetOffset: () -> Unit,
-    onDragHeightPx: (Float) -> Unit,
+    getOffset: () -> Float,
+    setOffset: (Float) -> Unit,
+    getHeight: () -> Float,
+    setHeight: (Float) -> Unit,
+    density: Float,
 ) {
     Row(
         Modifier
@@ -236,14 +240,18 @@ private fun ToolRow(
         DirectDragButton(
             icon = Icons.Rounded.SwapVert,
             desc = "Auf/Ab verschieben",
-            onDragDeltaPx = onDragOffsetPx,
-            onTap = onResetOffset,
+            getValue = getOffset,
+            setValue = setOffset,
+            density = density,
+            onTap = { setOffset(0f) },
         )
         Spacer(Modifier.width(5.dp))
         DirectDragButton(
             icon = Icons.Rounded.DragHandle,
             desc = "Höher/Kleiner ziehen",
-            onDragDeltaPx = onDragHeightPx,
+            getValue = getHeight,
+            setValue = setHeight,
+            density = density,
         )
         Spacer(Modifier.width(5.dp))
         HideButton()
@@ -254,13 +262,21 @@ private fun ToolRow(
 private fun DirectDragButton(
     icon: ImageVector,
     desc: String,
-    onDragDeltaPx: (Float) -> Unit,
+    getValue: () -> Float,
+    setValue: (Float) -> Unit,
+    density: Float,
     onTap: (() -> Unit)? = null,
 ) {
     var dragging by remember { mutableStateOf(false) }
-    val view = LocalView.current
-    val dragCb by rememberUpdatedState(onDragDeltaPx)
+    val ctx = LocalContext.current
+    val slop = remember(ctx) { ViewConfiguration.get(ctx).scaledTouchSlop.toFloat() }
+    val getCb by rememberUpdatedState(getValue)
+    val setCb by rememberUpdatedState(setValue)
     val tapCb by rememberUpdatedState(onTap)
+
+    var startRawY by remember { mutableFloatStateOf(0f) }
+    var startVal by remember { mutableFloatStateOf(0f) }
+    var moved by remember { mutableStateOf(false) }
 
     Box(
         Modifier
@@ -268,36 +284,38 @@ private fun DirectDragButton(
             .height(34.dp)
             .clip(ToolBtnShape)
             .background(if (dragging) Accent else KeyFill)
-            .pointerInput(Unit) {
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    val slop = viewConfiguration.touchSlop
-                    val startY = screenY(view, down.position.y)
-                    var lastY = startY
-                    var moved = false
-                    dragging = true
-                    keyHaptic()
-                    while (true) {
-                        val ev = awaitPointerEvent()
-                        val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
-                        if (!ch.pressed) break
-                        val curY = screenY(view, ch.position.y)
-                        if (!moved && abs(curY - startY) > slop) {
+            .pointerInteropFilter { ev ->
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        startRawY = ev.rawY
+                        startVal = getCb()
+                        moved = false
+                        dragging = true
+                        keyHaptic()
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val totalDy = ev.rawY - startRawY
+                        if (!moved && abs(totalDy) > slop) {
                             moved = true
-                            lastY = curY
-                        } else if (moved) {
-                            val dy = curY - lastY
-                            if (dy != 0f) {
-                                lastY = curY
-                                dragCb(dy)
-                            }
                         }
-                        ch.consume()
+                        if (moved) {
+                            setCb(startVal - (totalDy / density))
+                        }
+                        true
                     }
-                    dragging = false
-                    if (!moved) {
-                        tapCb?.invoke()
+                    MotionEvent.ACTION_UP -> {
+                        dragging = false
+                        if (!moved) {
+                            tapCb?.invoke()
+                        }
+                        true
                     }
+                    MotionEvent.ACTION_CANCEL -> {
+                        dragging = false
+                        true
+                    }
+                    else -> false
                 }
             },
         contentAlignment = Alignment.Center,
@@ -365,6 +383,7 @@ fun InlineKeyboard(ui: StateFlow<KeyboardController.Ui>) {
     val state by ui.collectAsState()
     var showEmojis by remember { mutableStateOf(false) }
     val popup = remember { KeyPopup() }
+    val density = LocalDensity.current
     BoxWithConstraints(
         Modifier
             .fillMaxWidth()
@@ -393,7 +412,9 @@ fun InlineKeyboard(ui: StateFlow<KeyboardController.Ui>) {
                 Keys(
                     state = state,
                     popup = popup,
-                    onDragOffsetPx = null,
+                    getOffset = null,
+                    setOffset = null,
+                    density = density.density,
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
@@ -592,7 +613,9 @@ private fun AccentPopup(p: KeyPopup) {
 private fun Keys(
     state: KeyboardController.Ui,
     popup: KeyPopup,
-    onDragOffsetPx: ((Float) -> Unit)?,
+    getOffset: (() -> Float)?,
+    setOffset: ((Float) -> Unit)?,
+    density: Float,
     modifier: Modifier,
 ) {
     val layout = rows(state.layer)
@@ -603,7 +626,7 @@ private fun Keys(
                     key(state.layer, r, i) {
                         when (k) {
                             is Ch -> CharKey(k, state, popup)
-                            is Fn -> FnKey(k, state, onDragOffsetPx)
+                            is Fn -> FnKey(k, state, getOffset, setOffset, density)
                         }
                     }
                 }
@@ -748,7 +771,13 @@ private fun CharLabels(label: String, alt: String?, swipe: Animatable<Float, *>)
 }
 
 @Composable
-private fun RowScope.FnKey(k: Fn, state: KeyboardController.Ui, onDragOffsetPx: ((Float) -> Unit)?) {
+private fun RowScope.FnKey(
+    k: Fn,
+    state: KeyboardController.Ui,
+    getOffset: (() -> Float)?,
+    setOffset: ((Float) -> Unit)?,
+    density: Float,
+) {
     val m = Modifier.weight(k.w).fillMaxHeight()
     when (k.kind) {
         FnKind.SHIFT -> FnCell(m, active = state.shift || state.caps, onTap = { KeyboardController.shift() }) {
@@ -756,7 +785,7 @@ private fun RowScope.FnKey(k: Fn, state: KeyboardController.Ui, onDragOffsetPx: 
         }
         FnKind.BACK -> BackspaceKey(m)
         FnKind.SPACE -> SpaceKey(m, state)
-        FnKind.ENTER -> EnterKey(m, state, onDragOffsetPx)
+        FnKind.ENTER -> EnterKey(m, state, getOffset, setOffset, density)
         FnKind.TO_LETTERS -> LayerKey(m, "ABC", Layer.LETTERS)
         FnKind.TO_SYMBOLS -> LayerKey(m, "?123", Layer.SYMBOLS)
         FnKind.TO_MORE -> LayerKey(m, "=\\<", Layer.MORE)
@@ -764,55 +793,70 @@ private fun RowScope.FnKey(k: Fn, state: KeyboardController.Ui, onDragOffsetPx: 
 }
 
 @Composable
-private fun EnterKey(m: Modifier, state: KeyboardController.Ui, onDragOffsetPx: ((Float) -> Unit)?) {
+private fun EnterKey(
+    m: Modifier,
+    state: KeyboardController.Ui,
+    getOffset: (() -> Float)?,
+    setOffset: ((Float) -> Unit)?,
+    density: Float,
+) {
     var pressed by remember { mutableStateOf(false) }
     var moving by remember { mutableStateOf(false) }
-    val view = LocalView.current
     val scope = rememberCoroutineScope()
-    val dragCb by rememberUpdatedState(onDragOffsetPx)
+    val getCb by rememberUpdatedState(getOffset)
+    val setCb by rememberUpdatedState(setOffset)
+
+    var holdJob by remember { mutableStateOf<Job?>(null) }
+    var lastRawY by remember { mutableFloatStateOf(0f) }
+    var startRawY by remember { mutableFloatStateOf(0f) }
+    var startOffset by remember { mutableFloatStateOf(0f) }
 
     Box(
-        m.pointerInput(Unit) {
-            awaitEachGesture {
-                val down = awaitFirstDown()
-                pressed = true
-                keyHaptic()
-                var lastY = screenY(view, down.position.y)
-                var isMoving = false
-                var released = false
-                val hold = scope.launch {
-                    delay(260L)
-                    if (dragCb != null) {
-                        isMoving = true
-                        moving = true
-                        keyHaptic()
-                    }
-                }
-                while (true) {
-                    val ev = awaitPointerEvent()
-                    val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
-                    if (!ch.pressed) {
-                        released = true
-                        break
-                    }
-                    val curY = screenY(view, ch.position.y)
-                    if (isMoving) {
-                        val dy = curY - lastY
-                        if (dy != 0f) {
-                            lastY = curY
-                            dragCb?.invoke(dy)
+        m.pointerInteropFilter { ev ->
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    pressed = true
+                    moving = false
+                    lastRawY = ev.rawY
+                    keyHaptic()
+                    holdJob?.cancel()
+                    holdJob = scope.launch {
+                        delay(260L)
+                        val g = getCb
+                        if (g != null && setCb != null) {
+                            startRawY = lastRawY
+                            startOffset = g()
+                            moving = true
+                            keyHaptic()
                         }
-                    } else {
-                        lastY = curY
                     }
-                    ch.consume()
+                    true
                 }
-                hold.cancel()
-                if (released && !isMoving) {
-                    KeyboardController.enter()
+                MotionEvent.ACTION_MOVE -> {
+                    lastRawY = ev.rawY
+                    if (moving) {
+                        val totalDy = ev.rawY - startRawY
+                        setCb?.invoke(startOffset - (totalDy / density))
+                    }
+                    true
                 }
-                moving = false
-                pressed = false
+                MotionEvent.ACTION_UP -> {
+                    holdJob?.cancel()
+                    val wasMoving = moving
+                    moving = false
+                    pressed = false
+                    if (!wasMoving) {
+                        KeyboardController.enter()
+                    }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    holdJob?.cancel()
+                    moving = false
+                    pressed = false
+                    true
+                }
+                else -> false
             }
         },
     ) {
