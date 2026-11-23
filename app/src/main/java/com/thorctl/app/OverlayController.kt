@@ -3,10 +3,9 @@ package com.thorctl.app
 import android.accessibilityservice.AccessibilityService
 import android.annotation.SuppressLint
 import android.app.Dialog
-import android.graphics.drawable.ColorDrawable
-import android.view.ViewGroup
 import android.content.Context
 import android.graphics.PixelFormat
+import android.graphics.drawable.ColorDrawable
 import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.Handler
@@ -16,6 +15,7 @@ import android.os.VibratorManager
 import android.provider.Settings
 import android.util.Log
 import android.view.Display
+import android.view.ViewGroup
 import android.view.WindowManager
 import androidx.compose.ui.platform.ComposeView
 import com.thorctl.ui.HudIcon
@@ -30,13 +30,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
-/**
- * Shows the menu on the bottom display.
- *
- * Preferred window type is TYPE_ACCESSIBILITY_OVERLAY (via our accessibility service's display
- * context): it is above all apps, the status bar and the IME, and cannot be hidden by apps that
- * use HIDE_OVERLAY_WINDOWS. If the service is not bound we fall back to TYPE_APPLICATION_OVERLAY.
- */
 @SuppressLint("StaticFieldLeak")
 object OverlayController {
     private const val TAG = "ThorOverlay"
@@ -50,12 +43,10 @@ object OverlayController {
     private var dialog: Dialog? = null
     private var owner: OverlayOwner? = null
 
-    /** Drives the enter/exit animation; the window is removed after the exit animation. */
     private val _visible = MutableStateFlow(false)
     val visible: StateFlow<Boolean> = _visible
 
     private val _mode = MutableStateFlow("none")
-    /** "accessibility", "application" or "none" — shown on the status screen. */
     val mode: StateFlow<String> = _mode
 
     private val _a11yBound = MutableStateFlow(false)
@@ -63,7 +54,7 @@ object OverlayController {
 
     fun init(context: Context) {
         app = context.applicationContext
-                DaemonClient.onButton = { type ->
+        DaemonClient.onButton = { type ->
             when (type) {
                 "short" -> toggle()
                 "long" -> {
@@ -73,7 +64,13 @@ object OverlayController {
                 }
             }
         }
-
+        DaemonClient.onHud = { o -> showHud(toHud(o)) }
+        scope.launch {
+            DaemonClient.state.collect { s ->
+                if (s != null && !s.bottomOn) removeNow()
+            }
+        }
+    }
 
     fun onAccessibilityConnected(service: AccessibilityService) {
         a11y = service
@@ -81,7 +78,6 @@ object OverlayController {
         Log.i(TAG, "accessibility service connected")
         BottomGestures.start(service)
         MouseDisplaySwitcher.start()
-        // Re-host an open menu in the stronger window layer.
         if (view != null && _mode.value != "accessibility") {
             removeNow()
             show()
@@ -108,7 +104,6 @@ object OverlayController {
         val dm = app.getSystemService(DisplayManager::class.java)
         val wanted = DaemonClient.state.value?.bottomDisplayId ?: -1
         if (wanted >= 0) dm.getDisplay(wanted)?.let { return it }
-        // Fallback: the smaller of the built-in panels that is not the default display.
         return dm.displays
             .filter { it.displayId != Display.DEFAULT_DISPLAY }
             .minByOrNull { it.mode.physicalWidth * it.mode.physicalHeight }
@@ -130,7 +125,6 @@ object OverlayController {
             if (service != null) add("accessibility")
             if (Settings.canDrawOverlays(app)) add("application")
         }
-        // Visible before the first composition so the entrance animation (not the exit) runs.
         _visible.value = true
         for (m in attempts) {
             if (tryAdd(display, m, service)) {
@@ -144,12 +138,6 @@ object OverlayController {
         Log.w(TAG, "could not show overlay: no accessibility service and no overlay permission")
     }
 
-    /**
-     * The menu is hosted in a Dialog window (still TYPE_ACCESSIBILITY_OVERLAY via the service's
-     * display context). Dialog windows have a DecorView, which gives us the public
-     * Window.setBackgroundBlurRadius() blur-region path. That path works on the secondary
-     * (bottom) display, unlike FLAG_BLUR_BEHIND, and animating it needs no window relayout.
-     */
     private fun tryAdd(display: Display, m: String, service: AccessibilityService?): Boolean {
         val type: Int
         val ctx: Context
@@ -168,7 +156,6 @@ object OverlayController {
         w.setFormat(PixelFormat.TRANSLUCENT)
         w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         w.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-        // Not focusable: tapping the menu must not steal window focus from the game on top.
         w.addFlags(
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
@@ -217,7 +204,6 @@ object OverlayController {
         _visible.value = false
     }
 
-    /** Max backdrop blur, in px, reached at the end of the reveal animation. */
     private const val MAX_BLUR_PX = 150
     private var lastBlur = -1
 
@@ -266,8 +252,6 @@ object OverlayController {
         } catch (_: Exception) {
         }
     }
-
-    // ---- HUD: short confirmation pill for AYN shortcuts ------------------------------------------
 
     private var hudView: ComposeView? = null
     private var hudWm: WindowManager? = null
@@ -388,7 +372,7 @@ object OverlayController {
         }
     }
 
-        private fun removeHud() {
+    private fun removeHud() {
         val v = hudView ?: return
         hudView = null
         try {
@@ -405,10 +389,6 @@ object OverlayController {
         main.post(r)
     }
 
-    /**
-     * Context and window type for an overlay on [display]: an accessibility overlay when the
-     * service is bound (above everything), else an application overlay. Null if neither works.
-     */
     fun overlayContext(display: Display): Pair<Context, Int>? {
         if (!::app.isInitialized) return null
         val service = a11y
