@@ -1,14 +1,10 @@
 package com.thorctl.ui
 
 import android.os.VibrationEffect
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -28,7 +24,9 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -37,22 +35,22 @@ import androidx.compose.material.icons.rounded.Backspace
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Done
+import androidx.compose.material.icons.rounded.EmojiEmotions
 import androidx.compose.material.icons.rounded.HighlightAlt
 import androidx.compose.material.icons.rounded.KeyboardHide
 import androidx.compose.material.icons.rounded.KeyboardReturn
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Send
-import androidx.compose.material.icons.rounded.Swipe
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -61,14 +59,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeJoin
@@ -98,121 +91,221 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-// Cocoon's keyboard look: white rounded keys with a soft shadow on the bottom screen's gradient.
-private val KbTop = Color(0xFFEFEFF3)
-private val KbBottom = Color(0xFFCFCFDA)
-private val KeyFill = Color(0xFFFFFFFF)
-private val KeyPressed = Color(0xFFE2E2EA)
-/** Function keys (shift, backspace, layer keys, enter): iOS's darker grey. */
-private val FnFill = Color(0xFFADB3BC)
-private val KeyInk = Color(0xFF1B1B1F)
-private val KeyInkSoft = Color(0xFF6B6B78)
-private val Accent = Color(0xFF6AA6F8)
-private val AccentDeep = Color(0xFF4F8EF0)
-private val PadFill = Color(0x8CFFFFFF)
-private val KeyShape = RoundedCornerShape(12.dp)
-private val KeyShadow = Color(0x40000000)
+// OLED Black Design
+private val KbBg = Color(0xFF000000)
+private val KeyFill = Color(0xFF1A1A1E)
+private val KeyPressed = Color(0xFF32323A)
+private val FnFill = Color(0xFF101014)
+private val KeyInk = Color(0xFFFFFFFF)
+private val KeyInkSoft = Color(0xFF8A8A96)
+private val Accent = Color(0xFF4F8EF0)
+private val KeyShape = RoundedCornerShape(10.dp)
+private val KeyShadow = Color(0x80000000)
 
-/**
- * The keyboard on the bottom screen: the lower half is a staggered QWERTY keyboard, the upper half
- * a touchpad that moves the cursor one character per step (with a tick for every character), with
- * Select / Copy / Paste above it and a preview of the text around the cursor on it.
- */
+private fun keyHaptic() = OverlayController.haptic(VibrationEffect.EFFECT_CLICK)
+
+private val EMOJIS = listOf(
+    "😀", "😂", "🤣", "😊", "😍", "🥰", "😘", "😎", "🤩", "🥳",
+    "😏", "😒", "🙄", "😬", "🤔", "😴", "🤯", "😱", "😭", "😤",
+    "😡", "🤬", "🤢", "🤮", "🥵", "🥶", "🤡", "👻", "💀", "💩",
+    "👍", "👎", "👌", "✌️", "🤞", "🤙", "💪", "👏", "🙌", "🙏",
+    "❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍", "💔", "❤️‍🔥",
+    "🔥", "✨", "⚡", "💥", "💯", "🎉", "🎊", "🏆", "🎮", "🕹️",
+    "📱", "💻", "🎧", "🔋", "⚙️", "🔧", "🚀", "🚗", "🍺", "☕",
+    "🍕", "🍔", "🍟", "🍗", "🥩", "🏋️", "🥊", "🐱", "🐶", "🦅",
+)
+
 @Composable
 fun KeyboardPanel(ui: StateFlow<KeyboardController.Ui>, visible: StateFlow<Boolean>) {
     val state by ui.collectAsState()
     val shown by visible.collectAsState()
-    // Starts hidden, so even a freshly created window slides in. The whole panel slides up from
-    // below the screen and back down, on the same strong in-out curve as the recents screen.
-    val transition = remember { MutableTransitionState(false) }
-    transition.targetState = shown
-    AnimatedVisibility(
-        visibleState = transition,
-        enter = slideInVertically(tween(330, easing = StrongInOut)) { it },
-        exit = slideOutVertically(tween(290, easing = StrongInOut)) { it },
+    var showEmojis by remember { mutableStateOf(false) }
+    LaunchedEffect(shown) { if (!shown) showEmojis = false }
+
+    if (!shown) return
+
+    val panelHeight = when (state.heightMode) {
+        1 -> 315.dp
+        2 -> 380.dp
+        else -> 255.dp
+    }
+    BoxWithConstraints(
+        Modifier
+            .fillMaxWidth()
+            .height(panelHeight)
+            .background(KbBg),
     ) {
-        BoxWithConstraints(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(KbTop, KbBottom)))) {
-            val keysHeight = maxHeight * 0.5f
-            val popup = remember { KeyPopup() }
-            popup.panelW = constraints.maxWidth.toFloat()
-            Column(Modifier.fillMaxSize()) {
-                Column(Modifier.fillMaxWidth().weight(1f).padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 4.dp)) {
-                    ToolRow(state)
-                    Spacer(Modifier.height(10.dp))
-                    Touchpad(state, Modifier.fillMaxWidth().weight(1f))
-                }
-                // Keys draw 3 dp inside their cells; the cells themselves touch, so there is no
-                // dead space between keys (and only 2 dp at the screen edges).
-                Keys(state, popup, Modifier.fillMaxWidth().height(keysHeight).padding(start = 2.dp, end = 2.dp, bottom = 3.dp))
+        val popup = remember { KeyPopup() }
+        popup.panelW = constraints.maxWidth.toFloat()
+        Column(Modifier.fillMaxSize()) {
+            ToolRow(state, showEmojis, onToggleEmojis = { showEmojis = !showEmojis })
+            if (showEmojis) {
+                EmojiGrid(
+                    Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                )
+            } else {
+                Keys(
+                    state,
+                    popup,
+                    Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(start = 2.dp, end = 2.dp, bottom = 3.dp),
+                )
             }
-            AccentPopup(popup)
         }
+        Flash(state, Modifier.align(Alignment.TopCenter).padding(top = 6.dp))
+        AccentPopup(popup)
     }
 }
 
-// ---- Select / Copy / Paste ----------------------------------------------------------------------
+// ---- Werkzeugleiste & Emojis --------------------------------------------------------------------
 
 @Composable
-private fun ToolRow(state: KeyboardController.Ui) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Pill(Icons.Rounded.HighlightAlt, "Select", active = state.selecting) {
+private fun ToolRow(state: KeyboardController.Ui, showEmojis: Boolean, onToggleEmojis: () -> Unit) {
+    val sizeLabel = when (state.heightMode) {
+        1 -> "M"
+        2 -> "L"
+        else -> "S"
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Pill(Icons.Rounded.HighlightAlt, "Markieren", active = state.selecting) {
             KeyboardController.toggleSelect()
         }
-        Spacer(Modifier.width(10.dp))
-        Pill(Icons.Rounded.ContentCopy, "Copy") { KeyboardController.copy() }
-        Spacer(Modifier.width(10.dp))
-        Pill(Icons.Rounded.ContentPaste, "Paste") { KeyboardController.paste() }
+        Spacer(Modifier.width(6.dp))
+        Pill(Icons.Rounded.ContentCopy, "Kopieren") { KeyboardController.copy() }
+        Spacer(Modifier.width(6.dp))
+        Pill(Icons.Rounded.ContentPaste, "Einfügen") { KeyboardController.paste() }
         Spacer(Modifier.weight(1f))
+        CircleIconButton(Icons.Rounded.EmojiEmotions, "Emojis", active = showEmojis, onTap = onToggleEmojis)
+        Spacer(Modifier.width(6.dp))
+        SizeButton(sizeLabel) { KeyboardController.cycleHeight() }
+        Spacer(Modifier.width(6.dp))
         HideButton()
     }
 }
 
 @Composable
-private fun HideButton() {
-    Box(
-        Modifier
-            .size(44.dp)
-            .raised(22.dp, pressed = false)
-            .clip(CircleShape)
-            .background(KeyFill)
-            .pointerInput(Unit) { detectTapGestures(onTap = { KeyboardController.hideKeyboard() }) },
-        contentAlignment = Alignment.Center,
+private fun EmojiGrid(modifier: Modifier) {
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(minSize = 44.dp),
+        modifier = modifier,
     ) {
-        Icon(Icons.Rounded.KeyboardHide, "Hide keyboard", tint = KeyInk, modifier = Modifier.size(22.dp))
+        items(EMOJIS) { emoji ->
+            Box(
+                Modifier
+                    .height(44.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .pointerInput(emoji) {
+                        detectTapGestures(onTap = {
+                            keyHaptic()
+                            KeyboardController.typeExact(emoji)
+                        })
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(emoji, fontSize = 24.sp)
+            }
+        }
     }
 }
 
-// ---- Upright: a regular keyboard on the top screen -----------------------------------------------
+@Composable
+private fun CircleIconButton(icon: ImageVector, desc: String, active: Boolean = false, onTap: () -> Unit) {
+    Box(
+        Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(if (active) Accent else KeyFill)
+            .pointerInput(Unit) {
+                detectTapGestures(onTap = {
+                    keyHaptic()
+                    onTap()
+                })
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, desc, tint = KeyInk, modifier = Modifier.size(20.dp))
+    }
+}
 
-/** Height of the keyboard on the top screen when the Thor is held upright. */
+@Composable
+private fun SizeButton(label: String, onTap: () -> Unit) {
+    Box(
+        Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(KeyFill)
+            .pointerInput(Unit) {
+                detectTapGestures(onTap = {
+                    keyHaptic()
+                    onTap()
+                })
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = KeyInk, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun HideButton() {
+    CircleIconButton(Icons.Rounded.KeyboardHide, "Tastatur ausblenden") {
+        KeyboardController.hideKeyboard()
+    }
+}
+
+// ---- Hochkant: Tastatur auf dem oberen Screen ---------------------------------------------------
+
 val INLINE_KEYBOARD_HEIGHT: Dp = 268.dp
 
-/**
- * Held upright (the top screen in portrait), the keyboard is an ordinary on-screen keyboard at the
- * bottom of the top screen, under the app: the same keys, with Paste and hide above them (no
- * touchpad; the text field is right there to tap).
- */
 @Composable
 fun InlineKeyboard(ui: StateFlow<KeyboardController.Ui>) {
     val state by ui.collectAsState()
+    var showEmojis by remember { mutableStateOf(false) }
     val popup = remember { KeyPopup() }
     BoxWithConstraints(
         Modifier
             .fillMaxWidth()
             .height(INLINE_KEYBOARD_HEIGHT)
-            .background(Brush.verticalGradient(listOf(KbTop, KbBottom))),
+            .background(KbBg),
     ) {
         popup.panelW = constraints.maxWidth.toFloat()
         Column(Modifier.fillMaxSize()) {
             Row(
-                Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 2.dp),
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Pill(Icons.Rounded.ContentPaste, "Paste") { KeyboardController.paste() }
+                Pill(Icons.Rounded.ContentPaste, "Einfügen") { KeyboardController.paste() }
                 Spacer(Modifier.weight(1f))
+                CircleIconButton(Icons.Rounded.EmojiEmotions, "Emojis", active = showEmojis) {
+                    showEmojis = !showEmojis
+                }
+                Spacer(Modifier.width(6.dp))
                 HideButton()
             }
-            Keys(state, popup, Modifier.fillMaxWidth().weight(1f).padding(start = 2.dp, end = 2.dp, bottom = 3.dp))
+            if (showEmojis) {
+                EmojiGrid(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 6.dp, vertical = 4.dp))
+            } else {
+                Keys(
+                    state,
+                    popup,
+                    Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(start = 2.dp, end = 2.dp, bottom = 3.dp),
+                )
+            }
         }
         AccentPopup(popup)
     }
@@ -222,115 +315,32 @@ fun InlineKeyboard(ui: StateFlow<KeyboardController.Ui>) {
 private fun Pill(icon: ImageVector, label: String, active: Boolean = false, onTap: () -> Unit) {
     var pressed by remember { mutableStateOf(false) }
     val fill = when {
-        active -> Brush.verticalGradient(listOf(Accent, AccentDeep))
-        pressed -> Brush.verticalGradient(listOf(KeyPressed, KeyPressed))
-        else -> Brush.verticalGradient(listOf(KeyFill, KeyFill))
+        active -> Accent
+        pressed -> KeyPressed
+        else -> KeyFill
     }
-    val ink = if (active) Color.White else KeyInk
     Row(
         Modifier
-            .height(44.dp)
-            .raised(22.dp, pressed)
-            .clip(RoundedCornerShape(22.dp))
+            .height(36.dp)
+            .clip(RoundedCornerShape(18.dp))
             .background(fill)
             .pointerInput(Unit) {
                 detectTapGestures(
                     onPress = {
                         pressed = true
-                        OverlayController.haptic(VibrationEffect.EFFECT_TICK)
+                        keyHaptic()
                         tryAwaitRelease()
                         pressed = false
                     },
                     onTap = { onTap() },
                 )
             }
-            .padding(start = 16.dp, end = 20.dp),
+            .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, null, tint = ink, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.width(8.dp))
-        Text(label, color = ink, fontSize = 16.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.5.sp)
-    }
-}
-
-// ---- Touchpad -----------------------------------------------------------------------------------
-
-@Composable
-private fun Touchpad(state: KeyboardController.Ui, modifier: Modifier) {
-    val stepPx = with(LocalDensity.current) { STEP.toPx() }
-    var touching by remember { mutableStateOf(false) }
-    val glow by animateFloatAsState(if (touching) 1f else 0f, tween(160), label = "pad")
-    Box(
-        modifier
-            .clip(KeyShape)
-            .background(PadFill)
-            .background(Accent.copy(alpha = 0.10f * glow))
-            .pointerInput(Unit) {
-                awaitEachGesture {
-                    awaitFirstDown()
-                    touching = true
-                    KeyboardController.beginSwipe()
-                    var acc = 0f
-                    while (true) {
-                        val ev = awaitPointerEvent()
-                        val ch = ev.changes.firstOrNull() ?: break
-                        if (!ch.pressed) break
-                        acc += ch.positionChange().x
-                        ch.consume()
-                        while (acc >= stepPx) {
-                            acc -= stepPx
-                            KeyboardController.move(1)
-                        }
-                        while (acc <= -stepPx) {
-                            acc += stepPx
-                            KeyboardController.move(-1)
-                        }
-                    }
-                    KeyboardController.endSwipe()
-                    touching = false
-                }
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        Preview(state, Modifier.fillMaxWidth().padding(horizontal = 20.dp))
-        Row(
-            Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(Icons.Rounded.Swipe, null, tint = KeyInkSoft, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(6.dp))
-            Text(
-                if (state.selecting) "Swipe to select" else "Swipe to move the cursor",
-                color = KeyInkSoft,
-                fontSize = 13.sp,
-            )
-        }
-        Flash(state, Modifier.align(Alignment.TopCenter).padding(top = 12.dp))
-    }
-}
-
-/** One line of text around the cursor, the caret (or the selection) kept in the middle. */
-@Composable
-private fun Preview(state: KeyboardController.Ui, modifier: Modifier) {
-    val style = androidx.compose.ui.text.TextStyle(color = KeyInk, fontSize = 22.sp)
-    Row(modifier.height(40.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.weight(1f).fillMaxHeight().clipToBounds(), contentAlignment = Alignment.CenterEnd) {
-            Text(state.before, style = style, softWrap = false, maxLines = 1, modifier = Modifier.wrapContentWidth(Alignment.End, unbounded = true))
-        }
-        if (state.selected.isEmpty()) {
-            Box(Modifier.width(2.dp).height(30.dp).background(AccentDeep))
-        } else {
-            Text(
-                state.selected,
-                style = style,
-                softWrap = false,
-                maxLines = 1,
-                modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(Accent.copy(alpha = 0.32f)).padding(horizontal = 2.dp),
-            )
-        }
-        Box(Modifier.weight(1f).fillMaxHeight().clipToBounds(), contentAlignment = Alignment.CenterStart) {
-            Text(state.after, style = style.copy(color = KeyInk.copy(alpha = 0.55f)), softWrap = false, maxLines = 1, modifier = Modifier.wrapContentWidth(Alignment.Start, unbounded = true))
-        }
+        Icon(icon, null, tint = KeyInk, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(label, color = KeyInk, fontSize = 13.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -340,7 +350,7 @@ private fun Flash(state: KeyboardController.Ui, modifier: Modifier) {
     LaunchedEffect(state.flashId) {
         if (state.flash == null) return@LaunchedEffect
         text = state.flash
-        delay(1300)
+        delay(1200)
         text = null
     }
     val a by animateFloatAsState(if (text != null) 1f else 0f, tween(150), label = "flash")
@@ -348,28 +358,23 @@ private fun Flash(state: KeyboardController.Ui, modifier: Modifier) {
         Text(
             text ?: "",
             color = Color.White,
-            fontSize = 14.sp,
+            fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
             modifier = modifier
                 .graphicsLayer { alpha = a }
                 .clip(RoundedCornerShape(14.dp))
-                .background(KeyInk.copy(alpha = 0.82f))
+                .background(KeyPressed)
                 .padding(horizontal = 14.dp, vertical = 6.dp),
         )
     }
 }
 
-// ---- Keys ---------------------------------------------------------------------------------------
+// ---- Tasten & Deutsches QWERTZ (Variante A) -----------------------------------------------------
 
 private sealed interface Key {
     val w: Float
 }
 
-/**
- * A character key. [alt] is typed by swiping down on the key (it is shown small above the
- * character); [lead] / [trail] widen the key's touch area (not the key) into the half-key gaps of
- * the staggered row.
- */
 private data class Ch(val c: String, val alt: String?, val lead: Float = 0f, val trail: Float = 0f) : Key {
     override val w: Float get() = 1f + lead + trail
 }
@@ -377,11 +382,9 @@ private data class Ch(val c: String, val alt: String?, val lead: Float = 0f, val
 private data class Fn(val kind: FnKind, override val w: Float) : Key
 private enum class FnKind { SHIFT, BACK, SPACE, ENTER, TO_LETTERS, TO_SYMBOLS, TO_MORE }
 
-// Every layer has the same key positions; a key's swipe-down character is the next layer's key in
-// the same spot (letters -> ?123 -> =\<), like the iPad keyboard.
-private val LETTER_ROWS = listOf("q w e r t y u i o p", "a s d f g h j k l", "z x c v b n m", ", .")
-private val SYMBOL_ROWS = listOf("1 2 3 4 5 6 7 8 9 0", "@ # \$ & * ( ) ' \"", "% - + = / ; :", "! ?")
-private val MORE_ROWS = listOf("[ ] { } ^ ~ < > | \\", "_ € £ ¥ ¢ • ° … ¶", "© ® ™ ✓ × ÷ §", "¡ ¿")
+private val LETTER_ROWS = listOf("q w e r t z u i o p", "a s d f g h j k l", "y x c v b n m", ", .")
+private val SYMBOL_ROWS = listOf("1 2 3 4 5 6 7 8 9 0", "@ # € & * ( ) ' \"", "% - + = / ; :", "! ?")
+private val MORE_ROWS = listOf("[ ] { } ^ ~ < > | \\", "_ \$ £ ¥ ¢ • ° … ¶", "© ® ™ ✓ × ÷ §", "¡ ¿")
 
 private fun rows(layer: Layer): List<List<Key>> {
     val (main, alt) = when (layer) {
@@ -408,18 +411,17 @@ private fun rows(layer: Layer): List<List<Key>> {
     )
 }
 
-/** Hold a key for these (slide along the strip, release to type). */
+/** Gedrückt halten für Umlaute & Akzente (ä, ö, ü, ß direkt an Position 1). */
 private val ACCENTS: Map<String, List<String>> = mapOf(
-    "a" to "à á â ä æ ã å ā", "c" to "ç ć č", "d" to "ď ð", "e" to "è é ê ë ē ė ę ě", "g" to "ğ",
-    "i" to "î ï í ī į ì", "l" to "ł", "n" to "ñ ń ň", "o" to "ô ö ò ó œ ø ō õ", "r" to "ř",
-    "s" to "ß ś š", "t" to "ť þ", "u" to "û ü ù ú ū ů", "y" to "ÿ ý", "z" to "ž ź ż",
-    "-" to "– — ·", "\$" to "€ £ ¥ ¢", "!" to "¡", "?" to "¿", "'" to "‘ ’ ‚", "\"" to "“ ” „ « »",
+    "a" to "ä à á â æ ã å ā", "c" to "ç ć č", "d" to "ď ð", "e" to "è é ê ë ē ė ę ě", "g" to "ğ",
+    "i" to "î ï í ī į ì", "l" to "ł", "n" to "ñ ń ň", "o" to "ö ô ò ó œ ø ō õ", "r" to "ř",
+    "s" to "ß ś š", "t" to "ť þ", "u" to "ü û ù ú ū ů", "y" to "ÿ ý", "z" to "ž ź ż",
+    "-" to "– — ·", "€" to "\$ £ ¥ ¢", "!" to "¡", "?" to "¿", "'" to "‘ ’ ‚", "\"" to "“ ” „ « »",
     "." to "…", "0" to "°", "%" to "‰", "*" to "★ †",
 ).mapValues { it.value.split(' ') }
 
-private const val LONG_PRESS_MS = 380L
+private const val LONG_PRESS_MS = 240L
 
-/** The accent strip shown above a held key; positions are in window (root) pixels. */
 @Stable
 private class KeyPopup {
     var options by mutableStateOf<List<String>>(emptyList())
@@ -436,7 +438,6 @@ private class KeyPopup {
         cellW = face.width
         cellH = face.height
         val total = cellW * opts.size
-        // Grow to the right of the key, or to the left when that would leave the screen.
         x = if (face.left + total <= panelW - gap) face.left else face.right - total
         x = x.coerceIn(gap, (panelW - total - gap).coerceAtLeast(gap))
         y = (face.top - cellH - gap).coerceAtLeast(0f)
@@ -455,7 +456,7 @@ private fun AccentPopup(p: KeyPopup) {
             .size(with(d) { (p.cellW * p.options.size).toDp() }, with(d) { p.cellH.toDp() })
             .shadow(10.dp, KeyShape, ambientColor = KeyShadow, spotColor = KeyShadow)
             .clip(KeyShape)
-            .background(KeyFill)
+            .background(KeyPressed)
             .padding(4.dp),
     ) {
         p.options.forEachIndexed { i, o ->
@@ -463,11 +464,11 @@ private fun AccentPopup(p: KeyPopup) {
                 Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .clip(RoundedCornerShape(9.dp))
+                    .clip(RoundedCornerShape(8.dp))
                     .background(if (i == p.selected) Accent else Color.Transparent),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(o, color = if (i == p.selected) Color.White else KeyInk, fontSize = 24.sp)
+                Text(o, color = KeyInk, fontSize = 22.sp)
             }
         }
     }
@@ -480,7 +481,6 @@ private fun Keys(state: KeyboardController.Ui, popup: KeyPopup, modifier: Modifi
         layout.forEachIndexed { r, row ->
             Row(Modifier.fillMaxWidth().weight(1f)) {
                 row.forEachIndexed { i, k ->
-                    // A fresh key per layer and position: no state or handlers carry over.
                     key(state.layer, r, i) {
                         when (k) {
                             is Ch -> CharKey(k, state, popup)
@@ -493,11 +493,6 @@ private fun Keys(state: KeyboardController.Ui, popup: KeyPopup, modifier: Modifi
     }
 }
 
-/**
- * A character key, iPad style: tap types it, swiping down types the small character shown above
- * it (that character grows into place while the letter slides down and fades), holding opens the
- * accent strip. The whole cell is the touch area; the key is drawn inset.
- */
 @Composable
 private fun RowScope.CharKey(k: Ch, state: KeyboardController.Ui, popup: KeyPopup) {
     val shifted = state.layer == Layer.LETTERS && (state.shift || state.caps)
@@ -520,7 +515,7 @@ private fun RowScope.CharKey(k: Ch, state: KeyboardController.Ui, popup: KeyPopu
                     val down = awaitFirstDown()
                     val acc = accentsNow
                     pressed = true
-                    OverlayController.haptic(VibrationEffect.EFFECT_TICK)
+                    keyHaptic()
                     var mode = PRESS
                     var released = false
                     var past = false
@@ -531,7 +526,7 @@ private fun RowScope.CharKey(k: Ch, state: KeyboardController.Ui, popup: KeyPopu
                         if (mode == PRESS && acc.isNotEmpty()) {
                             mode = ACCENTS_OPEN
                             popup.show(acc, face, cellRoot.x + down.position.x, gap)
-                            OverlayController.haptic(VibrationEffect.EFFECT_TICK)
+                            keyHaptic()
                         }
                     }
                     while (true) {
@@ -554,7 +549,7 @@ private fun RowScope.CharKey(k: Ch, state: KeyboardController.Ui, popup: KeyPopu
                                 scope.launch { swipe.snapTo(p) }
                                 if ((p >= 0.5f) != past) {
                                     past = p >= 0.5f
-                                    OverlayController.haptic(VibrationEffect.EFFECT_TICK)
+                                    keyHaptic()
                                 }
                             }
                             ACCENTS_OPEN -> {
@@ -596,8 +591,8 @@ private fun RowScope.CharKey(k: Ch, state: KeyboardController.Ui, popup: KeyPopu
 private const val PRESS = 0
 private const val SWIPE = 1
 private const val ACCENTS_OPEN = 2
+private const val CURSOR = 5
 
-/** The character, with the swipe-down character small above it; [swipe] 0..1 swaps them. */
 @Composable
 private fun CharLabels(label: String, alt: String?, swipe: Animatable<Float, *>) {
     BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -605,22 +600,22 @@ private fun CharLabels(label: String, alt: String?, swipe: Animatable<Float, *>)
         if (alt != null) {
             Text(
                 alt,
-                color = KeyInk,
-                fontSize = 24.sp,
+                color = KeyInkSoft,
+                fontSize = 22.sp,
                 modifier = Modifier.graphicsLayer {
                     val p = swipe.value as Float
                     val s = 0.5f + 0.5f * p
                     scaleX = s
                     scaleY = s
                     translationY = -h * 0.27f * (1f - p)
-                    alpha = 0.42f + 0.58f * p
+                    alpha = 0.65f + 0.35f * p
                 },
             )
         }
         Text(
             label,
             color = KeyInk,
-            fontSize = 24.sp,
+            fontSize = 22.sp,
             modifier = Modifier.graphicsLayer {
                 val p = swipe.value as Float
                 translationY = (if (alt != null) h * 0.09f else 0f) + h * 0.55f * p
@@ -641,9 +636,9 @@ private fun RowScope.FnKey(k: Fn, state: KeyboardController.Ui) {
             ShiftGlyph(filled = state.shift || state.caps, underline = state.caps, tint = KeyInk)
         }
         FnKind.BACK -> BackspaceKey(m)
-        FnKind.SPACE -> FnCell(m, fn = false, onTap = { KeyboardController.space() }) {}
+        FnKind.SPACE -> SpaceKey(m, state)
         FnKind.ENTER -> FnCell(m, onTap = { KeyboardController.enter() }) {
-            Icon(enterIcon(state.enter), "Enter", tint = KeyInk, modifier = Modifier.size(26.dp))
+            Icon(enterIcon(state.enter), "Enter", tint = KeyInk, modifier = Modifier.size(24.dp))
         }
         FnKind.TO_LETTERS -> LayerKey(m, "ABC", Layer.LETTERS)
         FnKind.TO_SYMBOLS -> LayerKey(m, "?123", Layer.SYMBOLS)
@@ -651,10 +646,64 @@ private fun RowScope.FnKey(k: Fn, state: KeyboardController.Ui) {
     }
 }
 
-/**
- * Backspace, Gboard style: tap deletes a character, hold repeats, swipe left selects whole words
- * back from the cursor (swipe back right to give them back) and letting go deletes them.
- */
+/** Leertaste: Tippen = Leerzeichen, nach links/rechts wischen = Cursor bewegen (LineageOS-Stil). */
+@Composable
+private fun SpaceKey(m: Modifier, state: KeyboardController.Ui) {
+    var pressed by remember { mutableStateOf(false) }
+    val stepPx = with(LocalDensity.current) { STEP.toPx() }
+    Box(
+        m.pointerInput(Unit) {
+            awaitEachGesture {
+                val down = awaitFirstDown()
+                pressed = true
+                keyHaptic()
+                val slop = viewConfiguration.touchSlop
+                var mode = PRESS
+                var released = false
+                var acc = 0f
+                while (true) {
+                    val ev = awaitPointerEvent()
+                    val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
+                    if (!ch.pressed) {
+                        released = true
+                        break
+                    }
+                    val dx = ch.position.x - down.position.x
+                    if (mode == PRESS && abs(dx) > slop) {
+                        mode = CURSOR
+                        KeyboardController.beginSwipe()
+                    }
+                    if (mode == CURSOR) {
+                        acc += ch.positionChange().x
+                        while (acc >= stepPx) {
+                            acc -= stepPx
+                            KeyboardController.move(1)
+                        }
+                        while (acc <= -stepPx) {
+                            acc += stepPx
+                            KeyboardController.move(-1)
+                        }
+                    }
+                    ch.consume()
+                }
+                when (mode) {
+                    PRESS -> if (released) KeyboardController.space()
+                    CURSOR -> KeyboardController.endSwipe()
+                }
+                pressed = false
+            }
+        },
+    ) {
+        KeyFace(pressed, Modifier.fillMaxSize(), fn = false, onFace = {}) {
+            Text(
+                if (state.selecting) "‹  Markieren  ›" else "Deutsch (QWERTZ)",
+                color = KeyInkSoft,
+                fontSize = 12.sp,
+            )
+        }
+    }
+}
+
 @Composable
 private fun BackspaceKey(m: Modifier) {
     var pressed by remember { mutableStateOf(false) }
@@ -665,7 +714,7 @@ private fun BackspaceKey(m: Modifier) {
             awaitEachGesture {
                 val down = awaitFirstDown()
                 pressed = true
-                OverlayController.haptic(VibrationEffect.EFFECT_TICK)
+                keyHaptic()
                 val slop = viewConfiguration.touchSlop
                 var mode = PRESS
                 var released = false
@@ -708,21 +757,19 @@ private fun BackspaceKey(m: Modifier) {
         },
     ) {
         KeyFace(pressed, Modifier.fillMaxSize(), fn = true, onFace = {}) {
-            Icon(Icons.Rounded.Backspace, "Backspace", tint = KeyInk, modifier = Modifier.size(24.dp))
+            Icon(Icons.Rounded.Backspace, "Löschen", tint = KeyInk, modifier = Modifier.size(22.dp))
         }
     }
 }
 
 private const val REPEATING = 3
 private const val WORDS = 4
-
-/** Backspace swipe distance per word. */
 private val WORD_STEP: Dp = 28.dp
 
 @Composable
 private fun LayerKey(m: Modifier, label: String, to: Layer) {
     FnCell(m, onTap = { KeyboardController.layer(to) }) {
-        Text(label, color = KeyInk, fontSize = 18.sp, fontWeight = FontWeight.Medium)
+        Text(label, color = KeyInk, fontSize = 16.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -734,10 +781,6 @@ private fun enterIcon(e: Enter): ImageVector = when (e) {
     Enter.DONE -> Icons.Rounded.Done
 }
 
-/**
- * A function key. The whole cell is the touch area. Acts on release with a tick on touch;
- * [repeat] keys act on touch and keep going while held (backspace).
- */
 @Composable
 private fun FnCell(m: Modifier, active: Boolean = false, repeat: Boolean = false, fn: Boolean = true, onTap: () -> Unit, content: @Composable () -> Unit) {
     var pressed by remember { mutableStateOf(false) }
@@ -748,7 +791,7 @@ private fun FnCell(m: Modifier, active: Boolean = false, repeat: Boolean = false
             detectTapGestures(
                 onPress = {
                     pressed = true
-                    OverlayController.haptic(VibrationEffect.EFFECT_TICK)
+                    keyHaptic()
                     var job: Job? = null
                     if (repeat) {
                         action()
@@ -772,7 +815,6 @@ private fun FnCell(m: Modifier, active: Boolean = false, repeat: Boolean = false
     }
 }
 
-/** What a key looks like: white, rounded, soft shadow, inset in its cell. */
 @Composable
 private fun KeyFace(
     pressed: Boolean,
@@ -782,11 +824,9 @@ private fun KeyFace(
     onFace: (Rect) -> Unit,
     content: @Composable () -> Unit,
 ) {
-    // Like iOS: character keys white (light grey when pressed); function keys darker grey that
-    // flash white when pressed; an active shift turns white with a filled arrow.
     val fill = when {
-        active -> KeyFill
-        pressed -> if (fn) KeyFill else KeyPressed
+        active -> Accent
+        pressed -> KeyPressed
         fn -> FnFill
         else -> KeyFill
     }
@@ -794,38 +834,15 @@ private fun KeyFace(
         modifier
             .padding(3.dp)
             .onGloballyPositioned { onFace(it.boundsInRoot()) }
-            .raised(12.dp, pressed)
             .clip(KeyShape)
             .background(fill),
         contentAlignment = Alignment.Center,
     ) { content() }
 }
 
-/** Height of the hard edge under each key (the iOS keyboard's "raise"). */
-private val LIP: Dp = 2.dp
-private val LipColor = Color(0xFF9A9BA6)
-
-/**
- * A key's raise: a hard, unblurred darker edge along its bottom, the face sitting [LIP] above it.
- * Pressed, the face drops onto the edge, so the key looks pushed in. Apply before clip/background.
- */
-private fun Modifier.raised(corner: Dp, pressed: Boolean): Modifier = this
-    .drawBehind {
-        val lip = LIP.toPx()
-        drawRoundRect(
-            LipColor,
-            topLeft = Offset(0f, lip),
-            size = Size(size.width, size.height - lip),
-            cornerRadius = CornerRadius(corner.toPx()),
-        )
-    }
-    .padding(bottom = LIP)
-    .graphicsLayer { translationY = if (pressed) LIP.toPx() else 0f }
-
-/** The ⇧ shift arrow: outlined, filled when shifted, underlined for caps lock. */
 @Composable
 private fun ShiftGlyph(filled: Boolean, underline: Boolean, tint: Color) {
-    Canvas(Modifier.size(26.dp)) {
+    Canvas(Modifier.size(24.dp)) {
         val w = size.width
         val h = size.height
         val p = Path().apply {
@@ -845,5 +862,5 @@ private fun ShiftGlyph(filled: Boolean, underline: Boolean, tint: Color) {
     }
 }
 
-/** Touchpad distance per character. */
+/** Wischdistanz auf der Leertaste pro Zeichen. */
 private val STEP: Dp = 11.dp
