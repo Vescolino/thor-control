@@ -1,534 +1,877 @@
-package com.thorctl.app
+package com.thorctl.ui
 
-import android.annotation.SuppressLint
-import android.app.Dialog
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.graphics.PixelFormat
-import android.graphics.drawable.ColorDrawable
-import android.hardware.display.DisplayManager
-import android.os.Handler
-import android.os.Looper
-import android.os.SystemClock
 import android.os.VibrationEffect
-import android.text.InputType
-import android.util.Log
-import android.view.Display
-import android.view.KeyEvent
-import android.view.ViewGroup
-import android.view.WindowManager
-import android.view.inputmethod.EditorInfo
-import android.view.inputmethod.ExtractedTextRequest
-import android.view.inputmethod.InputConnection
-import androidx.compose.runtime.Immutable
-import androidx.compose.ui.platform.ComposeView
-import com.thorctl.ui.KeyboardPanel
-import com.thorctl.ui.ThorTheme
-import kotlinx.coroutines.flow.MutableStateFlow
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.Backspace
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.ContentPaste
+import androidx.compose.material.icons.rounded.Done
+import androidx.compose.material.icons.rounded.EmojiEmotions
+import androidx.compose.material.icons.rounded.HighlightAlt
+import androidx.compose.material.icons.rounded.KeyboardHide
+import androidx.compose.material.icons.rounded.KeyboardReturn
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Send
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Fill
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.thorctl.app.KeyboardController
+import com.thorctl.app.KeyboardController.Enter
+import com.thorctl.app.KeyboardController.Layer
+import com.thorctl.app.OverlayController
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
-/**
- * Thor Keyboard's logic and its bottom-screen window. [ThorKeyboard] (the system keyboard
- * service) reports when typing starts and stops; this shows the keyboard on the bottom screen
- * whichever screen the text field is on, and turns key presses, touchpad swipes and the
- * select / copy / paste buttons into edits through the service's input connection.
- */
-@SuppressLint("StaticFieldLeak")
-object KeyboardController {
-    private const val TAG = "ThorKeyboard"
+// OLED Black Design
+private val KbBg = Color(0xFF000000)
+private val KeyFill = Color(0xFF1A1A1E)
+private val KeyPressed = Color(0xFF32323A)
+private val FnFill = Color(0xFF101014)
+private val KeyInk = Color(0xFFFFFFFF)
+private val KeyInkSoft = Color(0xFF8A8A96)
+private val Accent = Color(0xFF4F8EF0)
+private val KeyShape = RoundedCornerShape(10.dp)
+private val KeyShadow = Color(0x80000000)
 
-    enum class Layer { LETTERS, SYMBOLS, MORE }
-    enum class Enter { RETURN, GO, SEARCH, SEND, NEXT, DONE }
+// Kräftigere Vibration für Tasten
+private fun keyHaptic() = OverlayController.haptic(VibrationEffect.EFFECT_CLICK)
 
-    @Immutable
-    data class Ui(
-        val layer: Layer = Layer.LETTERS,
-        val shift: Boolean = false,
-        val caps: Boolean = false,
-        val selecting: Boolean = false,
-        val enter: Enter = Enter.RETURN,
-        /** Text around the cursor, for the preview on the touchpad. */
-        val before: String = "",
-        val selected: String = "",
-        val after: String = "",
-        /** Short confirmation shown on the touchpad ("Copied"), or null. */
-        val flash: String? = null,
-        val flashId: Long = 0,
-    )
+private val EMOJIS = listOf(
+    "😀", "😂", "🤣", "😊", "😍", "🥰", "😘", "😎", "🤩", "🥳",
+    "😏", "😒", "🙄", "😬", "🤔", "😴", "🤯", "😱", "😭", "😤",
+    "😡", "🤬", "🤢", "🤮", "🥵", "🥶", "🤡", "👻", "💀", "💩",
+    "👍", "👎", "👌", "✌️", "🤞", "🤙", "💪", "👏", "🙌", "🙏",
+    "❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍", "💔", "❤️‍🔥",
+    "🔥", "✨", "⚡", "💥", "💯", "🎉", "🎊", "🏆", "🎮", "🕹️",
+    "📱", "💻", "🎧", "🔋", "⚙️", "🔧", "🚀", "🚗", "🍺", "☕",
+    "🍕", "🍔", "🍟", "🍗", "🥩", "🏋️", "🥊", "🐱", "🐶", "🦅",
+)
 
-    private val _ui = MutableStateFlow(Ui())
-    val ui: StateFlow<Ui> = _ui
+@Composable
+fun KeyboardPanel(ui: StateFlow<KeyboardController.Ui>, visible: StateFlow<Boolean>) {
+    val state by ui.collectAsState()
+    val shown by visible.collectAsState()
+    var showEmojis by remember { mutableStateOf(false) }
+    LaunchedEffect(shown) { if (!shown) showEmojis = false }
 
-    private val _visible = MutableStateFlow(false)
-    val visible: StateFlow<Boolean> = _visible
-
-    private val main = Handler(Looper.getMainLooper())
-    private var ime: ThorKeyboard? = null
-    private var editor: EditorInfo? = null
-
-    // Selection as the editor last reported it, and the end the touchpad moves while selecting.
-    private var selStart = 0
-    private var selEnd = 0
-    private var anchor = 0
-    private var moving = 0
-
-    // Text snapshot taken when a swipe starts (bounds and surrogate pairs), null if unsupported.
-    private var text: CharSequence? = null
-    private var textOffset = 0
-
-    private var lastShiftTap = 0L
-
-    // ---- From the keyboard service ------------------------------------------------------------
-
-    fun attach(s: ThorKeyboard) {
-        ime = s
+    val transition = remember { MutableTransitionState(false) }
+    transition.targetState = shown
+    val panelHeight = when (state.heightMode) {
+        1 -> 315.dp
+        2 -> 380.dp
+        else -> 255.dp
     }
-
-    fun detach(s: ThorKeyboard) {
-        if (ime === s) ime = null
-        removeNow()
-    }
-
-    fun onStartInput(info: EditorInfo) {
-        editor = info
-        selStart = info.initialSelStart.coerceAtLeast(0)
-        selEnd = info.initialSelEnd.coerceAtLeast(0)
-    }
-
-    /**
-     * Typing starts. [inline]: the keyboard service shows the keys itself, on the top screen (the
-     * Thor is held upright); otherwise they go on the bottom screen.
-     */
-    fun onShow(info: EditorInfo, inline: Boolean) {
-        editor = info
-        val cls = info.inputType and InputType.TYPE_MASK_CLASS
-        val layer = if (cls == InputType.TYPE_CLASS_NUMBER || cls == InputType.TYPE_CLASS_PHONE) Layer.SYMBOLS else Layer.LETTERS
-        _ui.value = Ui(layer = layer, enter = enterFor(info))
-        autoShift()
-        refreshPreview()
-        main.removeCallbacks(removeRunnable)
-        inlineShown = inline
-        if (inline) {
-            _visible.value = false
-            removeNow()
-        } else {
-            show()
-        }
-        DaemonClient.keyboardVisible(true)
-    }
-
-    fun onHide() {
-        inlineShown = false
-        _visible.value = false
-        DaemonClient.keyboardVisible(false)
-        _ui.value = _ui.value.copy(selecting = false)
-        // Switching between fields hides and shows again right away: don't rebuild the window.
-        main.removeCallbacks(removeRunnable)
-        main.postDelayed(removeRunnable, 400)
-    }
-
-    fun onSelection(start: Int, end: Int) {
-        selStart = start
-        selEnd = end
-        refreshPreview()
-    }
-
-    private fun enterFor(info: EditorInfo): Enter {
-        val multiLine = info.inputType and InputType.TYPE_TEXT_FLAG_MULTI_LINE != 0
-        if (info.imeOptions and EditorInfo.IME_FLAG_NO_ENTER_ACTION != 0 || multiLine) return Enter.RETURN
-        return when (info.imeOptions and EditorInfo.IME_MASK_ACTION) {
-            EditorInfo.IME_ACTION_GO -> Enter.GO
-            EditorInfo.IME_ACTION_SEARCH -> Enter.SEARCH
-            EditorInfo.IME_ACTION_SEND -> Enter.SEND
-            EditorInfo.IME_ACTION_NEXT -> Enter.NEXT
-            EditorInfo.IME_ACTION_DONE -> Enter.DONE
-            else -> Enter.RETURN
-        }
-    }
-
-    private val ic: InputConnection? get() = ime?.currentInputConnection
-
-    private fun isPassword(): Boolean {
-        val t = editor?.inputType ?: return false
-        val v = t and InputType.TYPE_MASK_VARIATION
-        return (t and InputType.TYPE_MASK_CLASS) == InputType.TYPE_CLASS_TEXT &&
-            (v == InputType.TYPE_TEXT_VARIATION_PASSWORD || v == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
-                v == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD) ||
-            (t and InputType.TYPE_MASK_CLASS) == InputType.TYPE_CLASS_NUMBER && v == InputType.TYPE_NUMBER_VARIATION_PASSWORD
-    }
-
-    // ---- Keys ---------------------------------------------------------------------------------
-
-    fun type(s: String) {
-        val k = ime ?: return
-        val u = _ui.value
-        val out = if (u.layer == Layer.LETTERS && (u.shift || u.caps)) s.uppercase() else s
-        if (out.length == 1) k.sendKeyChar(out[0]) else ic?.commitText(out, 1)
-        if (u.shift && !u.caps) _ui.value = _ui.value.copy(shift = false)
-        endSelecting()
-        autoShift()
-    }
-
-    /** Types exactly this (swipe-down characters, accents): no automatic capital. */
-    fun typeExact(s: String) {
-        val k = ime ?: return
-        if (s.length == 1) k.sendKeyChar(s[0]) else ic?.commitText(s, 1)
-        val u = _ui.value
-        if (u.shift && !u.caps) _ui.value = u.copy(shift = false)
-        endSelecting()
-        autoShift()
-    }
-
-    /** Controller buttons forwarded by the daemon while the keyboard is up (L1 / R1 = shift). */
-    fun onControllerKey(key: String) {
-        if (key == "shift" && isShown) shift()
-    }
-
-    /** Keys are up on the top screen, drawn by the keyboard service (the Thor is held upright). */
-    @Volatile
-    private var inlineShown = false
-
-    val isShown: Boolean get() = _visible.value || inlineShown
-
-    fun space() {
-        ime?.sendKeyChar(' ')
-        endSelecting()
-        autoShift()
-    }
-
-    fun backspace() {
-        val k = ime ?: return
-        val c = ic
-        val raw = editor?.inputType == InputType.TYPE_NULL
-        when {
-            c == null || raw -> k.sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
-            selStart != selEnd -> c.commitText("", 1)
-            else -> if (!c.deleteSurroundingTextInCodePoints(1, 0)) k.sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
-        }
-        endSelecting()
-        autoShift()
-    }
-
-    // ---- Backspace swipe: select whole words backwards, delete on release (like Gboard) --------
-
-    /** Lengths (from the cursor back) of 1, 2, 3, … words; empty if the field can't report text. */
-    private var wordLens: List<Int> = emptyList()
-    private var wordBase = 0
-    private var wordEnd = 0
-    private var wordCount = 0
-
-    fun beginWordDelete() {
-        wordLens = emptyList()
-        wordCount = 0
-        val c = ic ?: return
-        val et = try {
-            c.getExtractedText(ExtractedTextRequest().apply { hintMaxChars = 100_000 }, 0)
-        } catch (_: Exception) {
-            null
-        } ?: return
-        val off = et.startOffset
-        wordBase = minOf(et.selectionStart, et.selectionEnd) + off
-        wordEnd = maxOf(et.selectionStart, et.selectionEnd) + off
-        val before = et.text?.subSequence(0, (wordBase - off).coerceIn(0, et.text.length))?.toString() ?: return
-        wordLens = wordsBack(before, MAX_WORDS)
-    }
-
-    /** Selects [n] words back from the cursor (0 = back to how it was). */
-    fun selectWords(n: Int) {
-        val k = n.coerceIn(0, wordLens.size)
-        if (k == wordCount) return
-        wordCount = k
-        val start = wordBase - (if (k == 0) 0 else wordLens[k - 1])
-        ic?.setSelection(start, wordEnd)
-        OverlayController.haptic(VibrationEffect.EFFECT_TICK)
-    }
-
-    /** Finger up: delete what is selected; cancelled (or nothing selected): leave the text alone. */
-    fun endWordDelete(commit: Boolean) {
-        if (wordCount > 0) {
-            if (commit) ic?.commitText("", 1) else ic?.setSelection(wordBase, wordEnd)
-        }
-        wordLens = emptyList()
-        wordCount = 0
-        endSelecting()
-        autoShift()
-    }
-
-    /** Word boundaries going back: spaces, then a run of letters/digits or a run of punctuation. */
-    private fun wordsBack(before: String, max: Int): List<Int> {
-        val out = ArrayList<Int>()
-        var i = before.length
-        while (i > 0 && out.size < max) {
-            while (i > 0 && before[i - 1].isWhitespace()) i--
-            if (i > 0) {
-                val word = before[i - 1].isLetterOrDigit()
-                while (i > 0 && !before[i - 1].isWhitespace() && before[i - 1].isLetterOrDigit() == word) i--
+    AnimatedVisibility(
+        visibleState = transition,
+        enter = slideInVertically(tween(260, easing = StrongInOut)) { it },
+        exit = slideOutVertically(tween(220, easing = StrongInOut)) { it },
+    ) {
+        BoxWithConstraints(
+            Modifier
+                .fillMaxWidth()
+                .height(panelHeight)
+                .background(KbBg),
+        ) {
+            val popup = remember { KeyPopup() }
+            popup.panelW = constraints.maxWidth.toFloat()
+            Column(Modifier.fillMaxSize()) {
+                ToolRow(state, showEmojis, onToggleEmojis = { showEmojis = !showEmojis })
+                if (showEmojis) {
+                    EmojiGrid(
+                        Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .padding(horizontal = 6.dp, vertical = 4.dp),
+                    )
+                } else {
+                    Keys(
+                        state,
+                        popup,
+                        Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .padding(start = 2.dp, end = 2.dp, bottom = 3.dp),
+                    )
+                }
             }
-            out += before.length - i
-        }
-        return out
-    }
-
-    fun enter() {
-        val k = ime ?: return
-        val info = editor
-        val action = (info?.imeOptions ?: 0) and EditorInfo.IME_MASK_ACTION
-        if (_ui.value.enter != Enter.RETURN && action != EditorInfo.IME_ACTION_NONE) {
-            ic?.performEditorAction(action)
-        } else {
-            k.sendKeyChar('\n')
-        }
-        endSelecting()
-    }
-
-    fun shift() {
-        val u = _ui.value
-        val now = SystemClock.uptimeMillis()
-        _ui.value = when {
-            u.caps -> u.copy(caps = false, shift = false)
-            u.shift && now - lastShiftTap < 350 -> u.copy(caps = true, shift = false)
-            else -> u.copy(shift = !u.shift)
-        }
-        lastShiftTap = now
-    }
-
-    fun layer(l: Layer) {
-        _ui.value = _ui.value.copy(layer = l, shift = false)
-    }
-
-    fun hideKeyboard() {
-        ime?.requestHideSelf(0)
-    }
-
-    /** Capital letter at the start of a sentence, when the field asks for it. */
-    private fun autoShift() {
-        val u = _ui.value
-        if (u.caps || u.layer != Layer.LETTERS) return
-        val type = editor?.inputType ?: return
-        val caps = try {
-            ic?.getCursorCapsMode(type) ?: 0
-        } catch (_: Exception) {
-            0
-        }
-        _ui.value = u.copy(shift = caps != 0)
-    }
-
-    // ---- Touchpad / selection -----------------------------------------------------------------
-
-    fun beginSwipe() {
-        val et = try {
-            ic?.getExtractedText(ExtractedTextRequest().apply { hintMaxChars = 100_000 }, 0)
-        } catch (_: Exception) {
-            null
-        }
-        text = et?.text
-        textOffset = et?.startOffset ?: 0
-        if (et != null) {
-            selStart = et.selectionStart + textOffset
-            selEnd = et.selectionEnd + textOffset
-            if (!_ui.value.selecting) moving = selEnd
+            Flash(state, Modifier.align(Alignment.TopCenter).padding(top = 6.dp))
+            AccentPopup(popup)
         }
     }
+}
 
-    fun endSwipe() {
+// ---- Werkzeugleiste & Emojis --------------------------------------------------------------------
+
+@Composable
+private fun ToolRow(state: KeyboardController.Ui, showEmojis: Boolean, onToggleEmojis: () -> Unit) {
+    val sizeLabel = when (state.heightMode) {
+        1 -> "M"
+        2 -> "L"
+        else -> "S"
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Pill(Icons.Rounded.HighlightAlt, "Markieren", active = state.selecting) {
+            KeyboardController.toggleSelect()
+        }
+        Spacer(Modifier.width(6.dp))
+        Pill(Icons.Rounded.ContentCopy, "Kopieren") { KeyboardController.copy() }
+        Spacer(Modifier.width(6.dp))
+        Pill(Icons.Rounded.ContentPaste, "Einfügen") { KeyboardController.paste() }
+        Spacer(Modifier.weight(1f))
+        CircleIconButton(Icons.Rounded.EmojiEmotions, "Emojis", active = showEmojis, onTap = onToggleEmojis)
+        Spacer(Modifier.width(6.dp))
+        SizeButton(sizeLabel) { KeyboardController.cycleHeight() }
+        Spacer(Modifier.width(6.dp))
+        HideButton()
+    }
+}
+
+@Composable
+private fun EmojiGrid(modifier: Modifier) {
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(minSize = 44.dp),
+        modifier = modifier,
+    ) {
+        items(EMOJIS) { emoji ->
+            Box(
+                Modifier
+                    .height(44.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .pointerInput(emoji) {
+                        detectTapGestures(onTap = {
+                            keyHaptic()
+                            KeyboardController.typeExact(emoji)
+                        })
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(emoji, fontSize = 24.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CircleIconButton(icon: ImageVector, desc: String, active: Boolean = false, onTap: () -> Unit) {
+    Box(
+        Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(if (active) Accent else KeyFill)
+            .pointerInput(Unit) {
+                detectTapGestures(onTap = {
+                    keyHaptic()
+                    onTap()
+                })
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, desc, tint = KeyInk, modifier = Modifier.size(20.dp))
+    }
+}
+
+@Composable
+private fun SizeButton(label: String, onTap: () -> Unit) {
+    Box(
+        Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(KeyFill)
+            .pointerInput(Unit) {
+                detectTapGestures(onTap = {
+                    keyHaptic()
+                    onTap()
+                })
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = KeyInk, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun HideButton() {
+    CircleIconButton(Icons.Rounded.KeyboardHide, "Tastatur ausblenden") {
+        KeyboardController.hideKeyboard()
+    }
+}
+
+// ---- Hochkant: Tastatur auf dem oberen Screen ---------------------------------------------------
+
+val INLINE_KEYBOARD_HEIGHT: Dp = 268.dp
+
+@Composable
+fun InlineKeyboard(ui: StateFlow<KeyboardController.Ui>) {
+    val state by ui.collectAsState()
+    var showEmojis by remember { mutableStateOf(false) }
+    val popup = remember { KeyPopup() }
+    BoxWithConstraints(
+        Modifier
+            .fillMaxWidth()
+            .height(INLINE_KEYBOARD_HEIGHT)
+            .background(KbBg),
+    ) {
+        popup.panelW = constraints.maxWidth.toFloat()
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Pill(Icons.Rounded.ContentPaste, "Einfügen") { KeyboardController.paste() }
+                Spacer(Modifier.weight(1f))
+                CircleIconButton(Icons.Rounded.EmojiEmotions, "Emojis", active = showEmojis) {
+                    showEmojis = !showEmojis
+                }
+                Spacer(Modifier.width(6.dp))
+                HideButton()
+            }
+            if (showEmojis) {
+                EmojiGrid(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 6.dp, vertical = 4.dp))
+            } else {
+                Keys(
+                    state,
+                    popup,
+                    Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(start = 2.dp, end = 2.dp, bottom = 3.dp),
+                )
+            }
+        }
+        AccentPopup(popup)
+    }
+}
+
+@Composable
+private fun Pill(icon: ImageVector, label: String, active: Boolean = false, onTap: () -> Unit) {
+    var pressed by remember { mutableStateOf(false) }
+    val fill = when {
+        active -> Accent
+        pressed -> KeyPressed
+        else -> KeyFill
+    }
+    Row(
+        Modifier
+            .height(36.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(fill)
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onPress = {
+                        pressed = true
+                        keyHaptic()
+                        tryAwaitRelease()
+                        pressed = false
+                    },
+                    onTap = { onTap() },
+                )
+            }
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, tint = KeyInk, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(label, color = KeyInk, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun Flash(state: KeyboardController.Ui, modifier: Modifier) {
+    var text by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(state.flashId) {
+        if (state.flash == null) return@LaunchedEffect
+        text = state.flash
+        delay(1200)
         text = null
     }
-
-    /** Moves the cursor (or the selection's moving end) one character; true if it moved. */
-    fun move(dir: Int): Boolean {
-        val c = ic ?: return false
-        val t = text
-        val selecting = _ui.value.selecting
-        if (t == null) {
-            // The field can't report its text: arrow keys (with shift while selecting).
-            val code = if (dir < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT
-            val meta = if (selecting) KeyEvent.META_SHIFT_ON or KeyEvent.META_SHIFT_LEFT_ON else 0
-            val now = SystemClock.uptimeMillis()
-            c.sendKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, code, 0, meta))
-            c.sendKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, code, 0, meta))
-            return true
-        }
-        val len = textOffset + t.length
-        val from = when {
-            selecting -> moving
-            dir < 0 -> selStart
-            else -> selEnd
-        }
-        var to = (from + dir).coerceIn(0, len)
-        // Never stop between the two halves of an emoji / surrogate pair.
-        val i = to - textOffset
-        if (i in 1 until t.length && Character.isHighSurrogate(t[i - 1]) && Character.isLowSurrogate(t[i])) to += dir
-        to = to.coerceIn(0, len)
-        val collapsing = !selecting && selStart != selEnd
-        if (to == from && !collapsing) return false
-        if (selecting) {
-            moving = to
-            c.setSelection(anchor, to)
-            selStart = minOf(anchor, to)
-            selEnd = maxOf(anchor, to)
-        } else {
-            val p = if (collapsing) from else to
-            c.setSelection(p, p)
-            selStart = p
-            selEnd = p
-            moving = p
-        }
-        OverlayController.haptic(VibrationEffect.EFFECT_TICK)
-        return true
-    }
-
-    fun toggleSelect() {
-        val on = !_ui.value.selecting
-        if (on) {
-            beginSwipe()
-            endSwipe()
-            anchor = selStart
-            moving = selEnd
-        }
-        _ui.value = _ui.value.copy(selecting = on)
-    }
-
-    private fun endSelecting() {
-        if (_ui.value.selecting) _ui.value = _ui.value.copy(selecting = false)
-    }
-
-    fun copy() {
-        val sel = try {
-            ic?.getSelectedText(0)
-        } catch (_: Exception) {
-            null
-        }
-        if (sel.isNullOrEmpty()) {
-            flash("Nothing selected")
-            return
-        }
-        if (isPassword()) {
-            flash("Can't copy passwords")
-            return
-        }
-        clipboard()?.setPrimaryClip(ClipData.newPlainText("text", sel))
-        endSelecting()
-        flash("Copied")
-    }
-
-    fun paste() {
-        val app = OverlayController.appContext
-        val clip = clipboard()?.primaryClip
-        val t = if (clip != null && clip.itemCount > 0) clip.getItemAt(0).coerceToText(app)?.toString() else null
-        if (t.isNullOrEmpty()) {
-            flash("Clipboard is empty")
-            return
-        }
-        ic?.commitText(t, 1)
-        endSelecting()
-        autoShift()
-    }
-
-    private fun clipboard(): ClipboardManager? = OverlayController.appContext.getSystemService(ClipboardManager::class.java)
-
-    private fun flash(msg: String) {
-        _ui.value = _ui.value.copy(flash = msg, flashId = SystemClock.uptimeMillis())
-    }
-
-    /** Text around the cursor for the touchpad preview (masked in password fields). */
-    private fun refreshPreview() {
-        val c = ic ?: return
-        try {
-            var before = c.getTextBeforeCursor(PREVIEW_CHARS, 0)?.toString().orEmpty()
-            var selected = c.getSelectedText(0)?.toString().orEmpty()
-            var after = c.getTextAfterCursor(PREVIEW_CHARS, 0)?.toString().orEmpty()
-            if (isPassword()) {
-                before = "•".repeat(before.length)
-                selected = "•".repeat(selected.length)
-                after = "•".repeat(after.length)
-            }
-            if (selected.length > 40) selected = selected.take(18) + " … " + selected.takeLast(18)
-            _ui.value = _ui.value.copy(before = before.substringAfterLast('\n'), selected = selected, after = after.substringBefore('\n'))
-        } catch (e: Exception) {
-            Log.w(TAG, "preview", e)
-        }
-    }
-
-    // ---- Window on the bottom screen --------------------------------------------------------
-
-    private var dialog: Dialog? = null
-    private var owner: OverlayOwner? = null
-    private val removeRunnable = Runnable { removeNow() }
-
-    private fun bottomDisplay(): Display? {
-        val dm = OverlayController.appContext.getSystemService(DisplayManager::class.java)
-        val id = DaemonClient.state.value?.bottomDisplayId ?: -1
-        if (id >= 0) dm.getDisplay(id)?.let { return it }
-        return dm.displays.filter { it.displayId != Display.DEFAULT_DISPLAY }.minByOrNull { it.mode.physicalWidth * it.mode.physicalHeight }
-    }
-
-    private fun show() {
-        // Typing needs the bottom screen: wake it if it was turned off (game mode, menu button).
-        if (DaemonClient.state.value?.bottomOn == false) {
-            DaemonClient.setBottomPower(true)
-            main.postDelayed({ if (_visible.value) showWindow() }, 350)
-            _visible.value = true
-            return
-        }
-        _visible.value = true
-        showWindow()
-    }
-
-    private fun showWindow() {
-        if (dialog != null) return
-        val display = bottomDisplay() ?: return
-        val (ctx, type) = OverlayController.overlayContext(display) ?: run {
-            Log.w(TAG, "no way to show the keyboard overlay")
-            return
-        }
-        val d = Dialog(ctx, com.thorctl.R.style.Theme_ThorControl_Menu)
-        val w = d.window ?: return
-        w.setType(type)
-        w.setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
-        w.setFormat(PixelFormat.TRANSLUCENT)
-        w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-        w.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-        // Not focusable: the text field keeps focus, whichever screen it is on.
-        w.addFlags(
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+    val a by animateFloatAsState(if (text != null) 1f else 0f, tween(150), label = "flash")
+    if (a > 0f || text != null) {
+        Text(
+            text ?: "",
+            color = Color.White,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = modifier
+                .graphicsLayer { alpha = a }
+                .clip(RoundedCornerShape(14.dp))
+                .background(KeyPressed)
+                .padding(horizontal = 14.dp, vertical = 6.dp),
         )
-        w.attributes = w.attributes.apply {
-            title = "ThorKeyboard"
-            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
-            fitInsetsTypes = 0
-            windowAnimations = 0
-        }
-        val o = OverlayOwner()
-        val v = ComposeView(ctx)
-        o.attach(v)
-        v.setContent { ThorTheme { KeyboardPanel(ui = ui, visible = visible) } }
-        d.setContentView(v, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        d.setCancelable(false)
-        try {
-            d.show()
-            o.resume()
-            dialog = d
-            owner = o
-        } catch (e: Exception) {
-            Log.w(TAG, "show keyboard failed", e)
-            o.destroy()
-        }
     }
-
-    private fun removeNow() {
-        main.removeCallbacks(removeRunnable)
-        val d = dialog ?: return
-        dialog = null
-        try {
-            d.dismiss()
-        } catch (_: Exception) {
-        }
-        owner?.destroy()
-        owner = null
-    }
-
-    private const val PREVIEW_CHARS = 60
-    private const val MAX_WORDS = 200
 }
+
+// ---- Tasten & Deutsches QWERTZ (Variante A) -----------------------------------------------------
+
+private sealed interface Key {
+    val w: Float
+}
+
+private data class Ch(val c: String, val alt: String?, val lead: Float = 0f, val trail: Float = 0f) : Key {
+    override val w: Float get() = 1f + lead + trail
+}
+
+private data class Fn(val kind: FnKind, override val w: Float) : Key
+private enum class FnKind { SHIFT, BACK, SPACE, ENTER, TO_LETTERS, TO_SYMBOLS, TO_MORE }
+
+private val LETTER_ROWS = listOf("q w e r t z u i o p", "a s d f g h j k l", "y x c v b n m", ", .")
+private val SYMBOL_ROWS = listOf("1 2 3 4 5 6 7 8 9 0", "@ # € & * ( ) ' \"", "% - + = / ; :", "! ?")
+private val MORE_ROWS = listOf("[ ] { } ^ ~ < > | \\", "_ \$ £ ¥ ¢ • ° … ¶", "© ® ™ ✓ × ÷ §", "¡ ¿")
+
+private fun rows(layer: Layer): List<List<Key>> {
+    val (main, alt) = when (layer) {
+        Layer.LETTERS -> LETTER_ROWS to SYMBOL_ROWS
+        Layer.SYMBOLS -> SYMBOL_ROWS to MORE_ROWS
+        Layer.MORE -> MORE_ROWS to null
+    }
+    fun row(i: Int): List<Ch> {
+        val alts = alt?.get(i)?.split(' ')
+        return main[i].split(' ').mapIndexed { j, c -> Ch(c, alts?.getOrNull(j)) }
+    }
+    val r2 = row(1).let { r -> r.mapIndexed { j, k -> k.copy(lead = if (j == 0) 0.5f else 0f, trail = if (j == r.lastIndex) 0.5f else 0f) } }
+    val r4 = row(3)
+    val (left3, left4) = when (layer) {
+        Layer.LETTERS -> FnKind.SHIFT to FnKind.TO_SYMBOLS
+        Layer.SYMBOLS -> FnKind.TO_MORE to FnKind.TO_LETTERS
+        Layer.MORE -> FnKind.TO_SYMBOLS to FnKind.TO_LETTERS
+    }
+    return listOf(
+        row(0),
+        r2,
+        listOf(Fn(left3, 1.5f)) + row(2) + Fn(FnKind.BACK, 1.5f),
+        listOf(Fn(left4, 1.5f), r4[0], Fn(FnKind.SPACE, 5f), r4[1], Fn(FnKind.ENTER, 1.5f)),
+    )
+}
+
+/** Gedrückt halten für Umlaute & Akzente (ä, ö, ü, ß direkt an Position 1). */
+private val ACCENTS: Map<String, List<String>> = mapOf(
+    "a" to "ä à á â æ ã å ā", "c" to "ç ć č", "d" to "ď ð", "e" to "è é ê ë ē ė ę ě", "g" to "ğ",
+    "i" to "î ï í ī į ì", "l" to "ł", "n" to "ñ ń ň", "o" to "ö ô ò ó œ ø ō õ", "r" to "ř",
+    "s" to "ß ś š", "t" to "ť þ", "u" to "ü û ù ú ū ů", "y" to "ÿ ý", "z" to "ž ź ż",
+    "-" to "– — ·", "€" to "\$ £ ¥ ¢", "!" to "¡", "?" to "¿", "'" to "‘ ’ ‚", "\"" to "“ ” „ « »",
+    "." to "…", "0" to "°", "%" to "‰", "*" to "★ †",
+).mapValues { it.value.split(' ') }
+
+private const val LONG_PRESS_MS = 240L
+
+@Stable
+private class KeyPopup {
+    var options by mutableStateOf<List<String>>(emptyList())
+    var x by mutableFloatStateOf(0f)
+    var y by mutableFloatStateOf(0f)
+    var cellW by mutableFloatStateOf(0f)
+    var cellH by mutableFloatStateOf(0f)
+    var selected by mutableIntStateOf(0)
+    var panelW = 0f
+
+    fun indexAt(rootX: Float): Int = ((rootX - x) / cellW).toInt().coerceIn(0, (options.size - 1).coerceAtLeast(0))
+
+    fun show(opts: List<String>, face: Rect, fingerX: Float, gap: Float) {
+        cellW = face.width
+        cellH = face.height
+        val total = cellW * opts.size
+        x = if (face.left + total <= panelW - gap) face.left else face.right - total
+        x = x.coerceIn(gap, (panelW - total - gap).coerceAtLeast(gap))
+        y = (face.top - cellH - gap).coerceAtLeast(0f)
+        options = opts
+        selected = indexAt(fingerX)
+    }
+}
+
+@Composable
+private fun AccentPopup(p: KeyPopup) {
+    if (p.options.isEmpty()) return
+    val d = LocalDensity.current
+    Row(
+        Modifier
+            .offset { IntOffset(p.x.roundToInt(), p.y.roundToInt()) }
+            .size(with(d) { (p.cellW * p.options.size).toDp() }, with(d) { p.cellH.toDp() })
+            .shadow(10.dp, KeyShape, ambientColor = KeyShadow, spotColor = KeyShadow)
+            .clip(KeyShape)
+            .background(KeyPressed)
+            .padding(4.dp),
+    ) {
+        p.options.forEachIndexed { i, o ->
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (i == p.selected) Accent else Color.Transparent),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(o, color = KeyInk, fontSize = 22.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun Keys(state: KeyboardController.Ui, popup: KeyPopup, modifier: Modifier) {
+    val layout = rows(state.layer)
+    Column(modifier) {
+        layout.forEachIndexed { r, row ->
+            Row(Modifier.fillMaxWidth().weight(1f)) {
+                row.forEachIndexed { i, k ->
+                    key(state.layer, r, i) {
+                        when (k) {
+                            is Ch -> CharKey(k, state, popup)
+                            is Fn -> FnKey(k, state)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RowScope.CharKey(k: Ch, state: KeyboardController.Ui, popup: KeyPopup) {
+    val shifted = state.layer == Layer.LETTERS && (state.shift || state.caps)
+    val label = if (shifted) k.c.uppercase() else k.c
+    val accents = ACCENTS[k.c].orEmpty().map { if (shifted && it != "ß") it.uppercase() else it }
+    val accentsNow by rememberUpdatedState(accents)
+    var pressed by remember { mutableStateOf(false) }
+    val swipe = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    var cellRoot by remember { mutableStateOf(Offset.Zero) }
+    var face by remember { mutableStateOf(Rect.Zero) }
+    val gap = with(LocalDensity.current) { 8.dp.toPx() }
+    Box(
+        Modifier
+            .weight(k.w)
+            .fillMaxHeight()
+            .onGloballyPositioned { cellRoot = it.positionInRoot() }
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    val acc = accentsNow
+                    pressed = true
+                    keyHaptic()
+                    var mode = PRESS
+                    var released = false
+                    var past = false
+                    val slop = viewConfiguration.touchSlop
+                    val swipeDist = (if (face.height > 0f) face.height else size.height.toFloat()) * 0.45f
+                    val hold = scope.launch {
+                        delay(LONG_PRESS_MS)
+                        if (mode == PRESS && acc.isNotEmpty()) {
+                            mode = ACCENTS_OPEN
+                            popup.show(acc, face, cellRoot.x + down.position.x, gap)
+                            keyHaptic()
+                        }
+                    }
+                    while (true) {
+                        val ev = awaitPointerEvent()
+                        val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!ch.pressed) {
+                            released = true
+                            break
+                        }
+                        val d = ch.position - down.position
+                        when (mode) {
+                            PRESS -> if (k.alt != null && d.y > slop && d.y > abs(d.x)) {
+                                mode = SWIPE
+                                hold.cancel()
+                            } else if (d.getDistance() > slop * 3) {
+                                hold.cancel()
+                            }
+                            SWIPE -> {
+                                val p = (d.y / swipeDist).coerceIn(0f, 1f)
+                                scope.launch { swipe.snapTo(p) }
+                                if ((p >= 0.5f) != past) {
+                                    past = p >= 0.5f
+                                    keyHaptic()
+                                }
+                            }
+                            ACCENTS_OPEN -> {
+                                val i = popup.indexAt(cellRoot.x + ch.position.x)
+                                if (i != popup.selected) {
+                                    popup.selected = i
+                                    OverlayController.haptic(VibrationEffect.EFFECT_TICK)
+                                }
+                            }
+                        }
+                        ch.consume()
+                    }
+                    hold.cancel()
+                    if (released) {
+                        when (mode) {
+                            PRESS -> KeyboardController.type(k.c)
+                            SWIPE -> if (past && k.alt != null) KeyboardController.typeExact(k.alt) else KeyboardController.type(k.c)
+                            ACCENTS_OPEN -> popup.options.getOrNull(popup.selected)?.let { KeyboardController.typeExact(it) }
+                        }
+                    }
+                    popup.options = emptyList()
+                    pressed = false
+                    scope.launch { swipe.animateTo(0f, spring(dampingRatio = 1f, stiffness = 900f)) }
+                }
+            },
+    ) {
+        Row(Modifier.fillMaxSize()) {
+            if (k.lead > 0f) Spacer(Modifier.weight(k.lead))
+            KeyFace(
+                pressed = pressed,
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                onFace = { face = it },
+            ) { CharLabels(label, k.alt, swipe) }
+            if (k.trail > 0f) Spacer(Modifier.weight(k.trail))
+        }
+    }
+}
+
+private const val PRESS = 0
+private const val SWIPE = 1
+private const val ACCENTS_OPEN = 2
+private const val CURSOR = 5
+
+@Composable
+private fun CharLabels(label: String, alt: String?, swipe: Animatable<Float, *>) {
+    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        val h = constraints.maxHeight.toFloat()
+        if (alt != null) {
+            Text(
+                alt,
+                color = KeyInkSoft,
+                fontSize = 22.sp,
+                modifier = Modifier.graphicsLayer {
+                    val p = swipe.value as Float
+                    val s = 0.5f + 0.5f * p
+                    scaleX = s
+                    scaleY = s
+                    translationY = -h * 0.27f * (1f - p)
+                    alpha = 0.65f + 0.35f * p
+                },
+            )
+        }
+        Text(
+            label,
+            color = KeyInk,
+            fontSize = 22.sp,
+            modifier = Modifier.graphicsLayer {
+                val p = swipe.value as Float
+                translationY = (if (alt != null) h * 0.09f else 0f) + h * 0.55f * p
+                alpha = 1f - 0.8f * p
+                val s = 1f - 0.15f * p
+                scaleX = s
+                scaleY = s
+            },
+        )
+    }
+}
+
+@Composable
+private fun RowScope.FnKey(k: Fn, state: KeyboardController.Ui) {
+    val m = Modifier.weight(k.w).fillMaxHeight()
+    when (k.kind) {
+        FnKind.SHIFT -> FnCell(m, active = state.shift || state.caps, onTap = { KeyboardController.shift() }) {
+            ShiftGlyph(filled = state.shift || state.caps, underline = state.caps, tint = KeyInk)
+        }
+        FnKind.BACK -> BackspaceKey(m)
+        FnKind.SPACE -> SpaceKey(m, state)
+        FnKind.ENTER -> FnCell(m, onTap = { KeyboardController.enter() }) {
+            Icon(enterIcon(state.enter), "Enter", tint = KeyInk, modifier = Modifier.size(24.dp))
+        }
+        FnKind.TO_LETTERS -> LayerKey(m, "ABC", Layer.LETTERS)
+        FnKind.TO_SYMBOLS -> LayerKey(m, "?123", Layer.SYMBOLS)
+        FnKind.TO_MORE -> LayerKey(m, "=\\<", Layer.MORE)
+    }
+}
+
+/** Leertaste: Tippen = Leerzeichen, nach links/rechts wischen = Cursor bewegen (LineageOS-Stil). */
+@Composable
+private fun SpaceKey(m: Modifier, state: KeyboardController.Ui) {
+    var pressed by remember { mutableStateOf(false) }
+    val stepPx = with(LocalDensity.current) { STEP.toPx() }
+    Box(
+        m.pointerInput(Unit) {
+            awaitEachGesture {
+                val down = awaitFirstDown()
+                pressed = true
+                keyHaptic()
+                val slop = viewConfiguration.touchSlop
+                var mode = PRESS
+                var released = false
+                var acc = 0f
+                while (true) {
+                    val ev = awaitPointerEvent()
+                    val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
+                    if (!ch.pressed) {
+                        released = true
+                        break
+                    }
+                    val dx = ch.position.x - down.position.x
+                    if (mode == PRESS && abs(dx) > slop) {
+                        mode = CURSOR
+                        KeyboardController.beginSwipe()
+                    }
+                    if (mode == CURSOR) {
+                        acc += ch.positionChange().x
+                        while (acc >= stepPx) {
+                            acc -= stepPx
+                            KeyboardController.move(1)
+                        }
+                        while (acc <= -stepPx) {
+                            acc += stepPx
+                            KeyboardController.move(-1)
+                        }
+                    }
+                    ch.consume()
+                }
+                when (mode) {
+                    PRESS -> if (released) KeyboardController.space()
+                    CURSOR -> KeyboardController.endSwipe()
+                }
+                pressed = false
+            }
+        },
+    ) {
+        KeyFace(pressed, Modifier.fillMaxSize(), fn = false, onFace = {}) {
+            Text(
+                if (state.selecting) "‹  Markieren  ›" else "Deutsch (QWERTZ)",
+                color = KeyInkSoft,
+                fontSize = 12.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun BackspaceKey(m: Modifier) {
+    var pressed by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val wordStep = with(LocalDensity.current) { WORD_STEP.toPx() }
+    Box(
+        m.pointerInput(Unit) {
+            awaitEachGesture {
+                val down = awaitFirstDown()
+                pressed = true
+                keyHaptic()
+                val slop = viewConfiguration.touchSlop
+                var mode = PRESS
+                var released = false
+                val repeat = scope.launch {
+                    delay(420)
+                    if (mode == PRESS) {
+                        mode = REPEATING
+                        while (true) {
+                            KeyboardController.backspace()
+                            delay(55)
+                        }
+                    }
+                }
+                while (true) {
+                    val ev = awaitPointerEvent()
+                    val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
+                    if (!ch.pressed) {
+                        released = true
+                        break
+                    }
+                    val dx = ch.position.x - down.position.x
+                    if (mode == PRESS && dx < -slop) {
+                        mode = WORDS
+                        repeat.cancel()
+                        KeyboardController.beginWordDelete()
+                    }
+                    if (mode == WORDS) {
+                        val back = -dx - slop
+                        KeyboardController.selectWords(if (back <= 0f) 0 else (back / wordStep).toInt() + 1)
+                    }
+                    ch.consume()
+                }
+                repeat.cancel()
+                when (mode) {
+                    PRESS -> if (released) KeyboardController.backspace()
+                    WORDS -> KeyboardController.endWordDelete(commit = released)
+                }
+                pressed = false
+            }
+        },
+    ) {
+        KeyFace(pressed, Modifier.fillMaxSize(), fn = true, onFace = {}) {
+            Icon(Icons.Rounded.Backspace, "Löschen", tint = KeyInk, modifier = Modifier.size(22.dp))
+        }
+    }
+}
+
+private const val REPEATING = 3
+private const val WORDS = 4
+private val WORD_STEP: Dp = 28.dp
+
+@Composable
+private fun LayerKey(m: Modifier, label: String, to: Layer) {
+    FnCell(m, onTap = { KeyboardController.layer(to) }) {
+        Text(label, color = KeyInk, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+private fun enterIcon(e: Enter): ImageVector = when (e) {
+    Enter.RETURN -> Icons.Rounded.KeyboardReturn
+    Enter.GO, Enter.NEXT -> Icons.Rounded.ArrowForward
+    Enter.SEARCH -> Icons.Rounded.Search
+    Enter.SEND -> Icons.Rounded.Send
+    Enter.DONE -> Icons.Rounded.Done
+}
+
+@Composable
+private fun FnCell(m: Modifier, active: Boolean = false, repeat: Boolean = false, fn: Boolean = true, onTap: () -> Unit, content: @Composable () -> Unit) {
+    var pressed by remember { mutableStateOf(false) }
+    val action by rememberUpdatedState(onTap)
+    val scope = rememberCoroutineScope()
+    Box(
+        m.pointerInput(repeat) {
+            detectTapGestures(
+                onPress = {
+                    pressed = true
+                    keyHaptic()
+                    var job: Job? = null
+                    if (repeat) {
+                        action()
+                        job = scope.launch {
+                            delay(420)
+                            while (true) {
+                                action()
+                                delay(55)
+                            }
+                        }
+                    }
+                    tryAwaitRelease()
+                    job?.cancel()
+                    pressed = false
+                },
+                onTap = { if (!repeat) action() },
+            )
+        },
+    ) {
+        KeyFace(pressed, Modifier.fillMaxSize(), active = active, fn = fn, onFace = {}) { content() }
+    }
+}
+
+@Composable
+private fun KeyFace(
+    pressed: Boolean,
+    modifier: Modifier,
+    active: Boolean = false,
+    fn: Boolean = false,
+    onFace: (Rect) -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val fill = when {
+        active -> Accent
+        pressed -> KeyPressed
+        fn -> FnFill
+        else -> KeyFill
+    }
+    Box(
+        modifier
+            .padding(3.dp)
+            .onGloballyPositioned { onFace(it.boundsInRoot()) }
+            .clip(KeyShape)
+            .background(fill),
+        contentAlignment = Alignment.Center,
+    ) { content() }
+}
+
+@Composable
+private fun ShiftGlyph(filled: Boolean, underline: Boolean, tint: Color) {
+    Canvas(Modifier.size(24.dp)) {
+        val w = size.width
+        val h = size.height
+        val p = Path().apply {
+            moveTo(w * 0.5f, h * 0.12f)
+            lineTo(w * 0.88f, h * 0.52f)
+            lineTo(w * 0.66f, h * 0.52f)
+            lineTo(w * 0.66f, h * 0.80f)
+            lineTo(w * 0.34f, h * 0.80f)
+            lineTo(w * 0.34f, h * 0.52f)
+            lineTo(w * 0.12f, h * 0.52f)
+            close()
+        }
+        val stroke = Stroke(width = w * 0.075f, join = StrokeJoin.Round)
+        drawPath(p, tint, style = if (filled) Fill else stroke)
+        if (filled) drawPath(p, tint, style = stroke)
+        if (underline) drawLine(tint, Offset(w * 0.28f, h * 0.94f), Offset(w * 0.72f, h * 0.94f), strokeWidth = w * 0.08f)
+    }
+}
+
+/** Wischdistanz auf der Leertaste pro Zeichen. */
+private val STEP: Dp = 11.dp
