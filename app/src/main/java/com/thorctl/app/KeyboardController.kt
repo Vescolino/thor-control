@@ -149,32 +149,33 @@ object KeyboardController {
         selEnd = info.initialSelEnd.coerceAtLeast(0)
     }
 
-    fun onShow(info: EditorInfo, inline: Boolean) {
+        fun onShow(info: EditorInfo, inline: Boolean) {
         editor = info
         val cls = info.inputType and InputType.TYPE_MASK_CLASS
         val layer = if (cls == InputType.TYPE_CLASS_NUMBER || cls == InputType.TYPE_CLASS_PHONE) Layer.SYMBOLS else Layer.LETTERS
         _ui.value = Ui(layer = layer, enter = enterFor(info), heightMode = savedHeightMode)
         autoShift()
         refreshPreview()
-        main.removeCallbacks(removeRunnable)
+        main.removeCallbacks(hideRunnable)
         inlineShown = inline
         if (inline) {
             _visible.value = false
-            removeNow()
+            dialog?.hide()
         } else {
             show()
         }
         DaemonClient.keyboardVisible(true)
     }
-
+        
     fun onHide() {
         inlineShown = false
         _visible.value = false
         DaemonClient.keyboardVisible(false)
         _ui.value = _ui.value.copy(selecting = false)
-        main.removeCallbacks(removeRunnable)
-        main.postDelayed(removeRunnable, 400)
+        main.removeCallbacks(hideRunnable)
+        main.postDelayed(hideRunnable, 240)
     }
+
 
     fun onSelection(start: Int, end: Int) {
         selStart = start
@@ -491,7 +492,14 @@ object KeyboardController {
 
     private var dialog: Dialog? = null
     private var owner: OverlayOwner? = null
-    private val removeRunnable = Runnable { removeNow() }
+    private val hideRunnable = Runnable {
+        if (!_visible.value) {
+            try {
+                dialog?.hide()
+            } catch (_: Exception) {
+            }
+        }
+    }
 
     private fun bottomDisplay(): Display? {
         val dm = OverlayController.appContext.getSystemService(DisplayManager::class.java)
@@ -512,7 +520,25 @@ object KeyboardController {
     }
 
     private fun showWindow() {
-        if (dialog != null) return
+        val existing = dialog
+        if (existing != null) {
+            val w = existing.window
+            if (w != null) {
+                val density = existing.context.resources.displayMetrics.density
+                w.attributes = w.attributes.apply {
+                    y = (getSavedOffsetYDp() * density).roundToInt()
+                }
+            }
+            if (!existing.isShowing) {
+                try {
+                    existing.show()
+                } catch (e: Exception) {
+                    Log.w(TAG, "reshow keyboard failed", e)
+                    removeNow()
+                }
+            }
+            if (dialog != null) return
+        }
         val display = bottomDisplay() ?: return
         val (ctx, type) = OverlayController.overlayContext(display) ?: run {
             Log.w(TAG, "no way to show the keyboard overlay")
@@ -557,7 +583,7 @@ object KeyboardController {
     }
 
     private fun removeNow() {
-        main.removeCallbacks(removeRunnable)
+        main.removeCallbacks(hideRunnable)
         val d = dialog ?: return
         dialog = null
         try {
