@@ -381,4 +381,124 @@ object KeyboardController {
             return
         }
         clipboard()?.setPrimaryClip(ClipData.newPlainText("text", sel))
-        endSelecting
+        endSelecting()
+        flash("Kopiert")
+    }
+
+    fun paste() {
+        val app = OverlayController.appContext
+        val clip = clipboard()?.primaryClip
+        val t = if (clip != null && clip.itemCount > 0) clip.getItemAt(0).coerceToText(app)?.toString() else null
+        if (t.isNullOrEmpty()) {
+            flash("Zwischenablage leer")
+            return
+        }
+        ic?.commitText(t, 1)
+        endSelecting()
+        autoShift()
+    }
+
+    private fun clipboard(): ClipboardManager? = OverlayController.appContext.getSystemService(ClipboardManager::class.java)
+
+    private fun flash(msg: String) {
+        _ui.value = _ui.value.copy(flash = msg, flashId = SystemClock.uptimeMillis())
+    }
+
+    private fun refreshPreview() {
+        val c = ic ?: return
+        try {
+            var before = c.getTextBeforeCursor(PREVIEW_CHARS, 0)?.toString().orEmpty()
+            var selected = c.getSelectedText(0)?.toString().orEmpty()
+            var after = c.getTextAfterCursor(PREVIEW_CHARS, 0)?.toString().orEmpty()
+            if (isPassword()) {
+                before = "•".repeat(before.length)
+                selected = "•".repeat(selected.length)
+                after = "•".repeat(after.length)
+            }
+            if (selected.length > 40) selected = selected.take(18) + " … " + selected.takeLast(18)
+            _ui.value = _ui.value.copy(before = before.substringAfterLast('\n'), selected = selected, after = after.substringBefore('\n'))
+        } catch (e: Exception) {
+            Log.w(TAG, "preview", e)
+        }
+    }
+
+    private var dialog: Dialog? = null
+    private var owner: OverlayOwner? = null
+    private val removeRunnable = Runnable { removeNow() }
+
+    private fun bottomDisplay(): Display? {
+        val dm = OverlayController.appContext.getSystemService(DisplayManager::class.java)
+        val id = DaemonClient.state.value?.bottomDisplayId ?: -1
+        if (id >= 0) dm.getDisplay(id)?.let { return it }
+        return dm.displays.filter { it.displayId != Display.DEFAULT_DISPLAY }.minByOrNull { it.mode.physicalWidth * it.mode.physicalHeight }
+    }
+
+    private fun show() {
+        if (DaemonClient.state.value?.bottomOn == false) {
+            DaemonClient.setBottomPower(true)
+            main.postDelayed({ if (_visible.value) showWindow() }, 350)
+            _visible.value = true
+            return
+        }
+        _visible.value = true
+        showWindow()
+    }
+
+    private fun showWindow() {
+        if (dialog != null) return
+        val display = bottomDisplay() ?: return
+        val (ctx, type) = OverlayController.overlayContext(display) ?: run {
+            Log.w(TAG, "no way to show the keyboard overlay")
+            return
+        }
+        val d = Dialog(ctx, com.thorctl.R.style.Theme_ThorControl_Menu)
+        val w = d.window ?: return
+        w.setType(type)
+        w.setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
+        w.setFormat(PixelFormat.TRANSLUCENT)
+        w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        w.setGravity(Gravity.BOTTOM)
+        w.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+        w.addFlags(
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+        )
+        w.attributes = w.attributes.apply {
+            title = "ThorKeyboard"
+            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            fitInsetsTypes = 0
+            windowAnimations = 0
+        }
+        val o = OverlayOwner()
+        val v = ComposeView(ctx)
+        o.attach(v)
+        v.setContent { ThorTheme { KeyboardPanel(ui = ui, visible = visible) } }
+        d.setContentView(v, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        d.setCancelable(false)
+        try {
+            d.show()
+            o.resume()
+            dialog = d
+            owner = o
+        } catch (e: Exception) {
+            Log.w(TAG, "show keyboard failed", e)
+            o.destroy()
+        }
+    }
+
+    private fun removeNow() {
+        main.removeCallbacks(removeRunnable)
+        val d = dialog ?: return
+        dialog = null
+        try {
+            d.dismiss()
+        } catch (_: Exception) {
+        }
+        owner?.destroy()
+        owner = null
+    }
+
+    private const val PREVIEW_CHARS = 60
+    private const val MAX_WORDS = 200
+}
