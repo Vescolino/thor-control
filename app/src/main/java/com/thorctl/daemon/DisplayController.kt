@@ -1,6 +1,6 @@
 package com.thorctl.daemon
-import kotlin.math.pow
 
+import kotlin.math.pow
 
 /**
  * Tracks which logical display is the top (6") and bottom (3.92") panel and controls their
@@ -75,16 +75,6 @@ internal class DisplayController {
         val id = idFor(which)
         if (id < 0) return 0f
         return try {
-            SystemServices.getBrightness(id)
-        } catch (e: Throwable) {
-            0f
-        }
-    }
-
-        fun getBrightness(which: String): Float {
-        val id = idFor(which)
-        if (id < 0) return 0f
-        return try {
             val raw = SystemServices.getBrightness(id).coerceIn(0f, 1f)
             if (which == "top") raw.toDouble().pow(1.0 / TOP_GAMMA).toFloat() else raw
         } catch (e: Throwable) {
@@ -103,7 +93,6 @@ internal class DisplayController {
             logw("setBrightness($which) failed", e)
         }
     }
-
 
     fun setBottomPower(on: Boolean): Boolean {
         val id = bottomId
@@ -233,9 +222,8 @@ internal class DisplayController {
         const val STATE_OFF = 1
         const val STATE_ON = 2
         const val MIN_BRIGHTNESS = 0.004f
+        const val TOP_GAMMA = 0.5
         const val BOTTOM_TOUCH_NAME = "fts_ts_secondary"
         const val TOP_TOUCH_NAME = "fts_ts"
-        const val TOP_GAMMA = 0.5
-
     }
 }
