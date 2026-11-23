@@ -7,7 +7,9 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.os.Build
 import android.service.wallpaper.WallpaperService
+import android.view.Display
 import android.view.SurfaceHolder
 import java.io.File
 import kotlin.math.max
@@ -48,6 +50,18 @@ class ThorWallpaperService : WallpaperService() {
             if (visible) draw()
         }
 
+        private fun isBottomDisplay(width: Int, height: Int): Boolean {
+            if (Build.VERSION.SDK_INT >= 29) {
+                val id = try {
+                    displayContext?.display?.displayId
+                } catch (_: Exception) {
+                    null
+                }
+                if (id != null) return id != Display.DEFAULT_DISPLAY
+            }
+            return max(width, height) <= 1300
+        }
+
         private fun ensureBitmap() {
             val ver = prefs.getLong(KEY_UPDATED, 0L)
             if (ver == loadedVersion && bitmap != null) return
@@ -73,7 +87,9 @@ class ThorWallpaperService : WallpaperService() {
             val frame = holder.surfaceFrame
             if (frame.width() <= 0 || frame.height() <= 0) return
 
-            ensureBitmap()
+            val bottom = isBottomDisplay(frame.width(), frame.height())
+            if (!bottom) ensureBitmap()
+
             val canvas = try {
                 holder.lockCanvas()
             } catch (_: Exception) {
@@ -82,6 +98,7 @@ class ThorWallpaperService : WallpaperService() {
 
             try {
                 canvas.drawColor(Color.BLACK)
+                if (bottom) return
                 val bmp = bitmap ?: return
                 val w = frame.width().toFloat()
                 val h = frame.height().toFloat()
