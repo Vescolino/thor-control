@@ -383,8 +383,8 @@ private data class Fn(val kind: FnKind, override val w: Float) : Key
 private enum class FnKind { SHIFT, BACK, SPACE, ENTER, TO_LETTERS, TO_SYMBOLS, TO_MORE }
 
 private val LETTER_ROWS = listOf("q w e r t z u i o p", "a s d f g h j k l", "y x c v b n m", ", .")
-private val SYMBOL_ROWS = listOf("1 2 3 4 5 6 7 8 9 0", "@ # € & * ( ) ' \"", "% - + = / ; :", "! ?")
-private val MORE_ROWS = listOf("[ ] { } ^ ~ < > | \\", "_ \$ £ ¥ ¢ • ° … ¶", "© ® ™ ✓ × ÷ §", "¡ ¿")
+private val SYMBOL_ROWS = listOf("1 2 3 4 5 6 7 8 9 0", "@ # € & - + ( ) /", "* \" ' : ; ! ?", ", .")
+private val MORE_ROWS = listOf("~ ` | • √ π ÷ × § Δ", "£ ¥ \$ ¢ ^ ° = { }", "\\ % © ® ™ ✓ [ ]", "< >")
 
 private fun rows(layer: Layer): List<List<Key>> {
     val (main, alt) = when (layer) {
@@ -416,8 +416,9 @@ private val ACCENTS: Map<String, List<String>> = mapOf(
     "a" to "ä à á â æ ã å ā", "c" to "ç ć č", "d" to "ď ð", "e" to "è é ê ë ē ė ę ě", "g" to "ğ",
     "i" to "î ï í ī į ì", "l" to "ł", "n" to "ñ ń ň", "o" to "ö ô ò ó œ ø ō õ", "r" to "ř",
     "s" to "ß ś š", "t" to "ť þ", "u" to "ü û ù ú ū ů", "y" to "ÿ ý", "z" to "ž ź ż",
-    "-" to "– — ·", "€" to "\$ £ ¥ ¢", "!" to "¡", "?" to "¿", "'" to "‘ ’ ‚", "\"" to "“ ” „ « »",
-    "." to "…", "0" to "°", "%" to "‰", "*" to "★ †",
+    "-" to "_ – — ·", "€" to "\$ £ ¥ ¢", "!" to "¡", "?" to "¿", "'" to "‘ ’ ‚", "\"" to "“ ” „ « »",
+    "." to "? ! , ; : / …", "0" to "°", "%" to "‰", "*" to "★ †",
+
 ).mapValues { it.value.split(' ') }
 
 private const val LONG_PRESS_MS = 240L
