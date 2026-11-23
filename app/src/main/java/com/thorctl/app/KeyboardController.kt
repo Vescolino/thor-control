@@ -35,6 +35,7 @@ object KeyboardController {
     private const val TAG = "ThorKeyboard"
     private const val PREFS_NAME = "thor_keyboard_prefs"
     private const val KEY_CUSTOM_HEIGHT_DP = "custom_height_dp"
+    private const val KEY_OFFSET_Y_DP = "offset_y_dp"
     private const val DEFAULT_HEIGHT_DP = 315f
 
     enum class Layer { LETTERS, SYMBOLS, MORE }
@@ -94,10 +95,38 @@ object KeyboardController {
                 .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit()
                 .putFloat(KEY_CUSTOM_HEIGHT_DP, clamped)
-                .commit()
+                .apply()
         } catch (_: Exception) {
         }
-        ime?.window?.window?.decorView?.requestLayout()
+    }
+
+    fun getSavedOffsetYDp(): Float {
+        return try {
+            OverlayController.appContext
+                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getFloat(KEY_OFFSET_Y_DP, 0f)
+                .coerceIn(0f, 350f)
+        } catch (_: Exception) {
+            0f
+        }
+    }
+
+    fun updateOffsetYDp(dp: Float) {
+        val clamped = dp.coerceIn(0f, 350f)
+        try {
+            OverlayController.appContext
+                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putFloat(KEY_OFFSET_Y_DP, clamped)
+                .apply()
+        } catch (_: Exception) {
+        }
+        val d = dialog ?: return
+        val w = d.window ?: return
+        val density = d.context.resources.displayMetrics.density
+        w.attributes = w.attributes.apply {
+            y = (clamped * density).roundToInt()
+        }
     }
 
     fun currentHeightPx(context: Context): Int {
@@ -136,7 +165,6 @@ object KeyboardController {
             show()
         }
         DaemonClient.keyboardVisible(true)
-        main.post { ime?.window?.window?.decorView?.requestLayout() }
     }
 
     fun onHide() {
@@ -144,7 +172,6 @@ object KeyboardController {
         _visible.value = false
         DaemonClient.keyboardVisible(false)
         _ui.value = _ui.value.copy(selecting = false)
-        main.post { ime?.window?.window?.decorView?.requestLayout() }
         main.removeCallbacks(removeRunnable)
         main.postDelayed(removeRunnable, 400)
     }
@@ -504,8 +531,10 @@ object KeyboardController {
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
         )
+        val density = ctx.resources.displayMetrics.density
         w.attributes = w.attributes.apply {
             title = "ThorKeyboard"
+            y = (getSavedOffsetYDp() * density).roundToInt()
             layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
             fitInsetsTypes = 0
             windowAnimations = 0
