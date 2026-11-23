@@ -63,14 +63,17 @@ object OverlayController {
 
     fun init(context: Context) {
         app = context.applicationContext
-        DaemonClient.onButton = { type -> if (type == "short") toggle() }
-        DaemonClient.onHud = { o -> showHud(toHud(o)) }
-        scope.launch {
-            DaemonClient.state.collect { s ->
-                if (s != null && !s.bottomOn) removeNow()
+                DaemonClient.onButton = { type ->
+            when (type) {
+                "short" -> toggle()
+                "long" -> {
+                    haptic(VibrationEffect.EFFECT_HEAVY_CLICK)
+                    val isOn = DaemonClient.state.value?.bottomOn ?: true
+                    DaemonClient.setBottomPower(!isOn)
+                }
             }
         }
-    }
+
 
     fun onAccessibilityConnected(service: AccessibilityService) {
         a11y = service
