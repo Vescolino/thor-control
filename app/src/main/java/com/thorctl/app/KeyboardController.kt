@@ -28,12 +28,14 @@ import com.thorctl.ui.KeyboardPanel
 import com.thorctl.ui.ThorTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlin.math.roundToInt
 
 @SuppressLint("StaticFieldLeak")
 object KeyboardController {
     private const val TAG = "ThorKeyboard"
-    private const val PREFS_NAME = "thor_keyboard_controller"
-    private const val KEY_HEIGHT_MODE = "height_mode"
+    private const val PREFS_NAME = "thor_keyboard_prefs"
+    private const val KEY_CUSTOM_HEIGHT_DP = "custom_height_dp"
+    private const val DEFAULT_HEIGHT_DP = 315f
 
     enum class Layer { LETTERS, SYMBOLS, MORE }
     enum class Enter { RETURN, GO, SEARCH, SEND, NEXT, DONE }
@@ -50,7 +52,7 @@ object KeyboardController {
         val after: String = "",
         val flash: String? = null,
         val flashId: Long = 0,
-        val heightMode: Int = 0,
+        val heightMode: Int = 1,
     )
 
     private val _ui = MutableStateFlow(Ui())
@@ -62,8 +64,7 @@ object KeyboardController {
     private val main = Handler(Looper.getMainLooper())
     private var ime: ThorKeyboard? = null
     private var editor: EditorInfo? = null
-    private var savedHeightMode = loadHeightMode()
-    private var appliedOverscanDisplayId: Int? = null
+    private var savedHeightMode = 1
 
     private var selStart = 0
     private var selEnd = 0
@@ -75,31 +76,37 @@ object KeyboardController {
 
     private var lastShiftTap = 0L
 
-    private fun loadHeightMode(): Int {
+    fun getSavedHeightDp(): Float {
         return try {
             OverlayController.appContext
                 .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .getInt(KEY_HEIGHT_MODE, 1)
-                .coerceIn(0, 2)
+                .getFloat(KEY_CUSTOM_HEIGHT_DP, DEFAULT_HEIGHT_DP)
+                .coerceIn(190f, 480f)
         } catch (_: Exception) {
-            1
+            DEFAULT_HEIGHT_DP
         }
     }
 
-    private fun persistHeightMode(mode: Int) {
+    fun updateCustomHeightDp(dp: Float) {
+        val clamped = dp.coerceIn(190f, 480f)
         try {
             OverlayController.appContext
                 .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit()
-                .putInt(KEY_HEIGHT_MODE, mode.coerceIn(0, 2))
-                .apply()
+                .putFloat(KEY_CUSTOM_HEIGHT_DP, clamped)
+                .commit()
         } catch (_: Exception) {
         }
+        ime?.window?.window?.decorView?.requestLayout()
+    }
+
+    fun currentHeightPx(context: Context): Int {
+        val density = context.resources.displayMetrics.density
+        return (getSavedHeightDp() * density).roundToInt()
     }
 
     fun attach(s: ThorKeyboard) {
         ime = s
-        savedHeightMode = loadHeightMode()
     }
 
     fun detach(s: ThorKeyboard) {
@@ -115,7 +122,6 @@ object KeyboardController {
 
     fun onShow(info: EditorInfo, inline: Boolean) {
         editor = info
-        savedHeightMode = loadHeightMode()
         val cls = info.inputType and InputType.TYPE_MASK_CLASS
         val layer = if (cls == InputType.TYPE_CLASS_NUMBER || cls == InputType.TYPE_CLASS_PHONE) Layer.SYMBOLS else Layer.LETTERS
         _ui.value = Ui(layer = layer, enter = enterFor(info), heightMode = savedHeightMode)
@@ -125,12 +131,12 @@ object KeyboardController {
         inlineShown = inline
         if (inline) {
             _visible.value = false
-            resetBottomOverscan()
             removeNow()
         } else {
             show()
         }
         DaemonClient.keyboardVisible(true)
+        main.post { ime?.window?.window?.decorView?.requestLayout() }
     }
 
     fun onHide() {
@@ -138,7 +144,7 @@ object KeyboardController {
         _visible.value = false
         DaemonClient.keyboardVisible(false)
         _ui.value = _ui.value.copy(selecting = false)
-        resetBottomOverscan()
+        main.post { ime?.window?.window?.decorView?.requestLayout() }
         main.removeCallbacks(removeRunnable)
         main.postDelayed(removeRunnable, 400)
     }
@@ -302,7 +308,6 @@ object KeyboardController {
     }
 
     fun hideKeyboard() {
-        resetBottomOverscan()
         ime?.requestHideSelf(0)
     }
 
@@ -311,43 +316,8 @@ object KeyboardController {
     }
 
     fun setHeightMode(mode: Int) {
-        val clamped = mode.coerceIn(0, 2)
-        savedHeightMode = clamped
-        persistHeightMode(clamped)
-        _ui.value = _ui.value.copy(heightMode = clamped)
-        if (_visible.value) applyBottomOverscanForMode(clamped)
-    }
-
-    private fun applyBottomOverscanForMode(mode: Int) {
-        val display = bottomDisplay() ?: return
-        val density = try {
-            OverlayController.appContext.resources.displayMetrics.density
-        } catch (_: Exception) {
-            2.5f
-        }
-        val heightDp = when (mode) {
-            0 -> 255f
-            2 -> 380f
-            else -> 315f
-        }
-        val bottomPx = (heightDp * density).toInt().coerceAtLeast(180)
-        runRootCommand("wm overscan -d ${display.displayId} 0,0,0,$bottomPx")
-        appliedOverscanDisplayId = display.displayId
-    }
-
-    private fun resetBottomOverscan() {
-        val id = appliedOverscanDisplayId ?: bottomDisplay()?.displayId ?: return
-        appliedOverscanDisplayId = null
-        runRootCommand("wm overscan -d $id reset")
-    }
-
-    private fun runRootCommand(cmd: String) {
-        try {
-            ProcessBuilder("su", "-c", cmd)
-                .redirectErrorStream(true)
-                .start()
-        } catch (_: Exception) {
-        }
+        savedHeightMode = mode.coerceIn(0, 2)
+        _ui.value = _ui.value.copy(heightMode = savedHeightMode)
     }
 
     private fun autoShift() {
@@ -508,11 +478,9 @@ object KeyboardController {
             DaemonClient.setBottomPower(true)
             main.postDelayed({ if (_visible.value) showWindow() }, 350)
             _visible.value = true
-            applyBottomOverscanForMode(savedHeightMode)
             return
         }
         _visible.value = true
-        applyBottomOverscanForMode(savedHeightMode)
         showWindow()
     }
 
@@ -561,7 +529,6 @@ object KeyboardController {
 
     private fun removeNow() {
         main.removeCallbacks(removeRunnable)
-        resetBottomOverscan()
         val d = dialog ?: return
         dialog = null
         try {
