@@ -1,6 +1,7 @@
 package com.thorctl.ui
 
 import android.os.VibrationEffect
+import android.view.View
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -9,7 +10,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -28,7 +28,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowForward
@@ -45,7 +44,6 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -80,6 +78,7 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -104,9 +103,16 @@ private val KeyInk = Color(0xFFFFFFFF)
 private val KeyInkSoft = Color(0xFF8A8A96)
 private val Accent = Color(0xFF4F8EF0)
 private val KeyShape = RoundedCornerShape(10.dp)
+private val ToolBtnShape = RoundedCornerShape(12.dp)
 private val KeyShadow = Color(0x80000000)
 
 private fun keyHaptic() = OverlayController.haptic(VibrationEffect.EFFECT_CLICK)
+
+private fun screenY(view: View, localY: Float): Float {
+    val loc = IntArray(2)
+    view.getLocationOnScreen(loc)
+    return loc[1] + localY
+}
 
 private val EMOJIS = listOf(
     "😀", "😂", "🤣", "😊", "😍", "🥰", "😘", "😎", "🤩", "🥳",
@@ -124,8 +130,6 @@ fun KeyboardPanel(ui: StateFlow<KeyboardController.Ui>, visible: StateFlow<Boole
     val state by ui.collectAsState()
     val shown by visible.collectAsState()
     var showEmojis by remember { mutableStateOf(false) }
-    var resizeMode by remember { mutableStateOf(false) }
-    var moveMode by remember { mutableStateOf(false) }
     var customHeightDp by remember { mutableFloatStateOf(KeyboardController.getSavedHeightDp()) }
     var offsetYDp by remember { mutableFloatStateOf(KeyboardController.getSavedOffsetYDp()) }
     val density = LocalDensity.current
@@ -133,8 +137,6 @@ fun KeyboardPanel(ui: StateFlow<KeyboardController.Ui>, visible: StateFlow<Boole
     LaunchedEffect(shown) {
         if (!shown) {
             showEmojis = false
-            resizeMode = false
-            moveMode = false
         } else {
             customHeightDp = KeyboardController.getSavedHeightDp()
             offsetYDp = KeyboardController.getSavedOffsetYDp()
@@ -150,6 +152,18 @@ fun KeyboardPanel(ui: StateFlow<KeyboardController.Ui>, visible: StateFlow<Boole
 
     if (!shown) return
 
+    val onDragOffsetPx: (Float) -> Unit = { dy ->
+        val deltaDp = with(density) { dy.toDp().value }
+        offsetYDp = (offsetYDp - deltaDp).coerceIn(0f, 350f)
+        KeyboardController.updateOffsetYDp(offsetYDp)
+    }
+
+    val onDragHeightPx: (Float) -> Unit = { dy ->
+        val deltaDp = with(density) { dy.toDp().value }
+        customHeightDp = (customHeightDp - deltaDp).coerceIn(190f, 480f)
+        KeyboardController.updateCustomHeightDp(customHeightDp)
+    }
+
     BoxWithConstraints(
         Modifier
             .fillMaxWidth()
@@ -159,52 +173,16 @@ fun KeyboardPanel(ui: StateFlow<KeyboardController.Ui>, visible: StateFlow<Boole
         val popup = remember { KeyPopup() }
         popup.panelW = constraints.maxWidth.toFloat()
         Column(Modifier.fillMaxSize()) {
-            if (moveMode) {
-                MoveBar(
-                    offsetYDp = offsetYDp,
-                    onOffsetChange = {
-                        offsetYDp = it
-                        KeyboardController.updateOffsetYDp(it)
-                    },
-                    onReset = {
-                        offsetYDp = 0f
-                        KeyboardController.updateOffsetYDp(0f)
-                    },
-                    onDone = { moveMode = false },
-                )
-            } else if (resizeMode) {
-                ResizeBar(
-                    heightDp = customHeightDp.roundToInt(),
-                    onDoneResize = {
-                        KeyboardController.updateCustomHeightDp(customHeightDp)
-                        resizeMode = false
-                    },
-                    onDragDeltaPx = { dy ->
-                        val deltaDp = with(density) { dy.toDp().value }
-                        customHeightDp = (customHeightDp - deltaDp).coerceIn(190f, 480f)
-                        KeyboardController.updateCustomHeightDp(customHeightDp)
-                    },
-                )
-            }
             ToolRow(
                 state = state,
                 showEmojis = showEmojis,
-                moveMode = moveMode,
-                resizeMode = resizeMode,
                 onToggleEmojis = { showEmojis = !showEmojis },
-                onToggleMove = {
-                    moveMode = !moveMode
-                    if (moveMode) resizeMode = false
+                onDragOffsetPx = onDragOffsetPx,
+                onResetOffset = {
+                    offsetYDp = 0f
+                    KeyboardController.updateOffsetYDp(0f)
                 },
-                onToggleResize = {
-                    if (resizeMode) {
-                        KeyboardController.updateCustomHeightDp(customHeightDp)
-                        resizeMode = false
-                    } else {
-                        resizeMode = true
-                        moveMode = false
-                    }
-                },
+                onDragHeightPx = onDragHeightPx,
             )
             if (showEmojis) {
                 EmojiGrid(
@@ -215,9 +193,10 @@ fun KeyboardPanel(ui: StateFlow<KeyboardController.Ui>, visible: StateFlow<Boole
                 )
             } else {
                 Keys(
-                    state,
-                    popup,
-                    Modifier
+                    state = state,
+                    popup = popup,
+                    onDragOffsetPx = onDragOffsetPx,
+                    modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
                         .padding(start = 2.dp, end = 2.dp, bottom = 3.dp),
@@ -230,147 +209,100 @@ fun KeyboardPanel(ui: StateFlow<KeyboardController.Ui>, visible: StateFlow<Boole
 }
 
 @Composable
-private fun MoveBar(
-    offsetYDp: Float,
-    onOffsetChange: (Float) -> Unit,
-    onReset: () -> Unit,
-    onDone: () -> Unit,
-) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .height(38.dp)
-            .background(Accent.copy(alpha = 0.25f))
-            .padding(horizontal = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Icons.Rounded.SwapVert, "Position", tint = KeyInk, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(6.dp))
-        Slider(
-            value = offsetYDp,
-            onValueChange = onOffsetChange,
-            valueRange = 0f..350f,
-            modifier = Modifier.weight(1f),
-        )
-        Spacer(Modifier.width(6.dp))
-        Box(
-            Modifier
-                .height(24.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(KeyFill)
-                .pointerInput(Unit) {
-                    detectTapGestures(onTap = {
-                        keyHaptic()
-                        onReset()
-                    })
-                }
-                .padding(horizontal = 8.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("Unten", color = KeyInk, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-        }
-        Spacer(Modifier.width(6.dp))
-        Box(
-            Modifier
-                .height(24.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(Accent)
-                .pointerInput(Unit) {
-                    detectTapGestures(onTap = {
-                        keyHaptic()
-                        onDone()
-                    })
-                }
-                .padding(horizontal = 10.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("Fertig", color = KeyInk, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-@Composable
-private fun ResizeBar(
-    heightDp: Int,
-    onDoneResize: () -> Unit,
-    onDragDeltaPx: (Float) -> Unit,
-) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .height(34.dp)
-            .background(Accent.copy(alpha = 0.25f))
-            .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragEnd = { onDoneResize() },
-                    onDragCancel = { onDoneResize() },
-                ) { change, dragAmount ->
-                    change.consume()
-                    onDragDeltaPx(dragAmount.y)
-                }
-            }
-            .padding(horizontal = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Icons.Rounded.DragHandle, "Höhe ziehen", tint = KeyInk, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = "Höhe: ${heightDp} dp · Nach oben/unten ziehen",
-            color = KeyInk,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.weight(1f),
-        )
-        Box(
-            Modifier
-                .height(24.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(Accent)
-                .pointerInput(Unit) {
-                    detectTapGestures(onTap = {
-                        keyHaptic()
-                        onDoneResize()
-                    })
-                }
-                .padding(horizontal = 10.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("Fertig", color = KeyInk, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-@Composable
 private fun ToolRow(
     state: KeyboardController.Ui,
     showEmojis: Boolean,
-    moveMode: Boolean,
-    resizeMode: Boolean,
     onToggleEmojis: () -> Unit,
-    onToggleMove: () -> Unit,
-    onToggleResize: () -> Unit,
+    onDragOffsetPx: (Float) -> Unit,
+    onResetOffset: () -> Unit,
+    onDragHeightPx: (Float) -> Unit,
 ) {
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 5.dp),
+            .padding(horizontal = 6.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Pill(Icons.Rounded.HighlightAlt, "Markieren", active = state.selecting) {
             KeyboardController.toggleSelect()
         }
-        Spacer(Modifier.width(6.dp))
+        Spacer(Modifier.width(4.dp))
         Pill(Icons.Rounded.ContentCopy, "Kopieren") { KeyboardController.copy() }
-        Spacer(Modifier.width(6.dp))
+        Spacer(Modifier.width(4.dp))
         Pill(Icons.Rounded.ContentPaste, "Einfügen") { KeyboardController.paste() }
         Spacer(Modifier.weight(1f))
-        CircleIconButton(Icons.Rounded.EmojiEmotions, "Emojis", active = showEmojis, onTap = onToggleEmojis)
-        Spacer(Modifier.width(6.dp))
-        CircleIconButton(Icons.Rounded.SwapVert, "Tastatur verschieben", active = moveMode, onTap = onToggleMove)
-        Spacer(Modifier.width(6.dp))
-        CircleIconButton(Icons.Rounded.DragHandle, "Größe anpassen", active = resizeMode, onTap = onToggleResize)
-        Spacer(Modifier.width(6.dp))
+        WideIconButton(Icons.Rounded.EmojiEmotions, "Emojis", active = showEmojis, onTap = onToggleEmojis)
+        Spacer(Modifier.width(5.dp))
+        DirectDragButton(
+            icon = Icons.Rounded.SwapVert,
+            desc = "Auf/Ab verschieben",
+            onDragDeltaPx = onDragOffsetPx,
+            onTap = onResetOffset,
+        )
+        Spacer(Modifier.width(5.dp))
+        DirectDragButton(
+            icon = Icons.Rounded.DragHandle,
+            desc = "Höher/Kleiner ziehen",
+            onDragDeltaPx = onDragHeightPx,
+        )
+        Spacer(Modifier.width(5.dp))
         HideButton()
+    }
+}
+
+@Composable
+private fun DirectDragButton(
+    icon: ImageVector,
+    desc: String,
+    onDragDeltaPx: (Float) -> Unit,
+    onTap: (() -> Unit)? = null,
+) {
+    var dragging by remember { mutableStateOf(false) }
+    val view = LocalView.current
+    val dragCb by rememberUpdatedState(onDragDeltaPx)
+    val tapCb by rememberUpdatedState(onTap)
+
+    Box(
+        Modifier
+            .width(44.dp)
+            .height(34.dp)
+            .clip(ToolBtnShape)
+            .background(if (dragging) Accent else KeyFill)
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    val slop = viewConfiguration.touchSlop
+                    val startY = screenY(view, down.position.y)
+                    var lastY = startY
+                    var moved = false
+                    dragging = true
+                    keyHaptic()
+                    while (true) {
+                        val ev = awaitPointerEvent()
+                        val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!ch.pressed) break
+                        val curY = screenY(view, ch.position.y)
+                        if (!moved && abs(curY - startY) > slop) {
+                            moved = true
+                            lastY = curY
+                        } else if (moved) {
+                            val dy = curY - lastY
+                            if (dy != 0f) {
+                                lastY = curY
+                                dragCb(dy)
+                            }
+                        }
+                        ch.consume()
+                    }
+                    dragging = false
+                    if (!moved) {
+                        tapCb?.invoke()
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, desc, tint = KeyInk, modifier = Modifier.size(20.dp))
     }
 }
 
@@ -400,11 +332,12 @@ private fun EmojiGrid(modifier: Modifier) {
 }
 
 @Composable
-private fun CircleIconButton(icon: ImageVector, desc: String, active: Boolean = false, onTap: () -> Unit) {
+private fun WideIconButton(icon: ImageVector, desc: String, active: Boolean = false, onTap: () -> Unit) {
     Box(
         Modifier
-            .size(34.dp)
-            .clip(CircleShape)
+            .width(44.dp)
+            .height(34.dp)
+            .clip(ToolBtnShape)
             .background(if (active) Accent else KeyFill)
             .pointerInput(Unit) {
                 detectTapGestures(onTap = {
@@ -414,13 +347,13 @@ private fun CircleIconButton(icon: ImageVector, desc: String, active: Boolean = 
             },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, desc, tint = KeyInk, modifier = Modifier.size(19.dp))
+        Icon(icon, desc, tint = KeyInk, modifier = Modifier.size(20.dp))
     }
 }
 
 @Composable
 private fun HideButton() {
-    CircleIconButton(Icons.Rounded.KeyboardHide, "Tastatur ausblenden") {
+    WideIconButton(Icons.Rounded.KeyboardHide, "Tastatur ausblenden") {
         KeyboardController.hideKeyboard()
     }
 }
@@ -448,7 +381,7 @@ fun InlineKeyboard(ui: StateFlow<KeyboardController.Ui>) {
             ) {
                 Pill(Icons.Rounded.ContentPaste, "Einfügen") { KeyboardController.paste() }
                 Spacer(Modifier.weight(1f))
-                CircleIconButton(Icons.Rounded.EmojiEmotions, "Emojis", active = showEmojis) {
+                WideIconButton(Icons.Rounded.EmojiEmotions, "Emojis", active = showEmojis) {
                     showEmojis = !showEmojis
                 }
                 Spacer(Modifier.width(6.dp))
@@ -458,9 +391,10 @@ fun InlineKeyboard(ui: StateFlow<KeyboardController.Ui>) {
                 EmojiGrid(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 6.dp, vertical = 4.dp))
             } else {
                 Keys(
-                    state,
-                    popup,
-                    Modifier
+                    state = state,
+                    popup = popup,
+                    onDragOffsetPx = null,
+                    modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
                         .padding(start = 2.dp, end = 2.dp, bottom = 3.dp),
@@ -495,12 +429,12 @@ private fun Pill(icon: ImageVector, label: String, active: Boolean = false, onTa
                     onTap = { onTap() },
                 )
             }
-            .padding(horizontal = 11.dp),
+            .padding(horizontal = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(icon, null, tint = KeyInk, modifier = Modifier.size(15.dp))
-        Spacer(Modifier.width(5.dp))
-        Text(label, color = KeyInk, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.width(4.dp))
+        Text(label, color = KeyInk, fontSize = 11.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -655,7 +589,12 @@ private fun AccentPopup(p: KeyPopup) {
 }
 
 @Composable
-private fun Keys(state: KeyboardController.Ui, popup: KeyPopup, modifier: Modifier) {
+private fun Keys(
+    state: KeyboardController.Ui,
+    popup: KeyPopup,
+    onDragOffsetPx: ((Float) -> Unit)?,
+    modifier: Modifier,
+) {
     val layout = rows(state.layer)
     Column(modifier) {
         layout.forEachIndexed { r, row ->
@@ -664,7 +603,7 @@ private fun Keys(state: KeyboardController.Ui, popup: KeyPopup, modifier: Modifi
                     key(state.layer, r, i) {
                         when (k) {
                             is Ch -> CharKey(k, state, popup)
-                            is Fn -> FnKey(k, state)
+                            is Fn -> FnKey(k, state, onDragOffsetPx)
                         }
                     }
                 }
@@ -809,7 +748,7 @@ private fun CharLabels(label: String, alt: String?, swipe: Animatable<Float, *>)
 }
 
 @Composable
-private fun RowScope.FnKey(k: Fn, state: KeyboardController.Ui) {
+private fun RowScope.FnKey(k: Fn, state: KeyboardController.Ui, onDragOffsetPx: ((Float) -> Unit)?) {
     val m = Modifier.weight(k.w).fillMaxHeight()
     when (k.kind) {
         FnKind.SHIFT -> FnCell(m, active = state.shift || state.caps, onTap = { KeyboardController.shift() }) {
@@ -817,12 +756,74 @@ private fun RowScope.FnKey(k: Fn, state: KeyboardController.Ui) {
         }
         FnKind.BACK -> BackspaceKey(m)
         FnKind.SPACE -> SpaceKey(m, state)
-        FnKind.ENTER -> FnCell(m, onTap = { KeyboardController.enter() }) {
-            Icon(enterIcon(state.enter), "Enter", tint = KeyInk, modifier = Modifier.size(24.dp))
-        }
+        FnKind.ENTER -> EnterKey(m, state, onDragOffsetPx)
         FnKind.TO_LETTERS -> LayerKey(m, "ABC", Layer.LETTERS)
         FnKind.TO_SYMBOLS -> LayerKey(m, "?123", Layer.SYMBOLS)
         FnKind.TO_MORE -> LayerKey(m, "=\\<", Layer.MORE)
+    }
+}
+
+@Composable
+private fun EnterKey(m: Modifier, state: KeyboardController.Ui, onDragOffsetPx: ((Float) -> Unit)?) {
+    var pressed by remember { mutableStateOf(false) }
+    var moving by remember { mutableStateOf(false) }
+    val view = LocalView.current
+    val scope = rememberCoroutineScope()
+    val dragCb by rememberUpdatedState(onDragOffsetPx)
+
+    Box(
+        m.pointerInput(Unit) {
+            awaitEachGesture {
+                val down = awaitFirstDown()
+                pressed = true
+                keyHaptic()
+                var lastY = screenY(view, down.position.y)
+                var isMoving = false
+                var released = false
+                val hold = scope.launch {
+                    delay(260L)
+                    if (dragCb != null) {
+                        isMoving = true
+                        moving = true
+                        keyHaptic()
+                    }
+                }
+                while (true) {
+                    val ev = awaitPointerEvent()
+                    val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
+                    if (!ch.pressed) {
+                        released = true
+                        break
+                    }
+                    val curY = screenY(view, ch.position.y)
+                    if (isMoving) {
+                        val dy = curY - lastY
+                        if (dy != 0f) {
+                            lastY = curY
+                            dragCb?.invoke(dy)
+                        }
+                    } else {
+                        lastY = curY
+                    }
+                    ch.consume()
+                }
+                hold.cancel()
+                if (released && !isMoving) {
+                    KeyboardController.enter()
+                }
+                moving = false
+                pressed = false
+            }
+        },
+    ) {
+        KeyFace(pressed, Modifier.fillMaxSize(), active = moving, fn = true, onFace = {}) {
+            Icon(
+                if (moving) Icons.Rounded.SwapVert else enterIcon(state.enter),
+                "Enter",
+                tint = KeyInk,
+                modifier = Modifier.size(24.dp),
+            )
+        }
     }
 }
 
