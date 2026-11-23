@@ -94,7 +94,6 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-// OLED Black Design
 private val KbBg = Color(0xFF000000)
 private val KeyFill = Color(0xFF1A1A1E)
 private val KeyPressed = Color(0xFF32323A)
@@ -145,9 +144,9 @@ fun KeyboardPanel(ui: StateFlow<KeyboardController.Ui>, visible: StateFlow<Boole
         val popup = remember { KeyPopup() }
         popup.panelW = constraints.maxWidth.toFloat()
         Column(Modifier.fillMaxSize()) {
-            // Oberer Zieh-Rand + Live-Textvorschau
             PreviewAndResizeBar(
                 state = state,
+                heightDp = customHeightDp.roundToInt(),
                 resizeMode = resizeMode,
                 onToggleResize = { resizeMode = !resizeMode },
                 onDragDeltaPx = { dy ->
@@ -244,8 +243,6 @@ private fun PreviewAndResizeBar(
     }
 }
 
-// ---- Werkzeugleiste & Emojis --------------------------------------------------------------------
-
 @Composable
 private fun ToolRow(
     state: KeyboardController.Ui,
@@ -326,8 +323,6 @@ private fun HideButton() {
         KeyboardController.hideKeyboard()
     }
 }
-
-// ---- Hochkant: Tastatur auf dem oberen Screen ---------------------------------------------------
 
 val INLINE_KEYBOARD_HEIGHT: Dp = 268.dp
 
@@ -433,8 +428,6 @@ private fun Flash(state: KeyboardController.Ui, modifier: Modifier) {
     }
 }
 
-// ---- Tasten & Deutsches QWERTZ ------------------------------------------------------------------
-
 private sealed interface Key {
     val w: Float
 }
@@ -475,7 +468,6 @@ private fun rows(layer: Layer): List<List<Key>> {
     )
 }
 
-/** Gedrückt halten für Umlaute & Akzente (ü, ö, ä, ß direkt an Position 1). */
 private val ACCENTS: Map<String, List<String>> = mapOf(
     "a" to "ä à á â æ ã å ā", "c" to "ç ć č", "d" to "ď ð", "e" to "è é ê ë ē ė ę ě", "g" to "ğ",
     "i" to "î ï í ī į ì", "l" to "ł", "n" to "ñ ń ň", "o" to "ö ô ò ó œ ø ō õ", "r" to "ř",
@@ -710,7 +702,6 @@ private fun RowScope.FnKey(k: Fn, state: KeyboardController.Ui) {
     }
 }
 
-/** Leertaste: Tippen = Leerzeichen, nach links/rechts wischen = Cursor bewegen. */
 @Composable
 private fun SpaceKey(m: Modifier, state: KeyboardController.Ui) {
     var pressed by remember { mutableStateOf(false) }
@@ -926,5 +917,4 @@ private fun ShiftGlyph(filled: Boolean, underline: Boolean, tint: Color) {
     }
 }
 
-/** Wischdistanz auf der Leertaste pro Zeichen. */
 private val STEP: Dp = 11.dp
