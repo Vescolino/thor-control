@@ -188,11 +188,12 @@ fun KeyboardPanel(ui: StateFlow<KeyboardController.Ui>, visible: StateFlow<Boole
 @Composable
 private fun PreviewAndResizeBar(
     state: KeyboardController.Ui,
+    heightDp: Int,
     resizeMode: Boolean,
     onToggleResize: () -> Unit,
     onDragDeltaPx: (Float) -> Unit,
 ) {
-    val previewText = state.preview.ifEmpty { "Tippen zum Schreiben…" }
+    val infoText = state.flash?.takeIf { it.isNotBlank() } ?: "Höhe: ${heightDp} dp · Deutsch (QWERTZ)"
     Row(
         Modifier
             .fillMaxWidth()
@@ -210,8 +211,8 @@ private fun PreviewAndResizeBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = previewText,
-            color = if (state.preview.isEmpty()) KeyInkSoft else KeyInk,
+            text = infoText,
+            color = if (state.flash == null) KeyInkSoft else KeyInk,
             fontSize = 13.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
