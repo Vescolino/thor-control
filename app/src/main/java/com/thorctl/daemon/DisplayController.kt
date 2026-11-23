@@ -235,5 +235,7 @@ internal class DisplayController {
         const val MIN_BRIGHTNESS = 0.004f
         const val BOTTOM_TOUCH_NAME = "fts_ts_secondary"
         const val TOP_TOUCH_NAME = "fts_ts"
+        const val TOP_GAMMA = 0.5
+
     }
 }
